@@ -43,6 +43,10 @@ class Brain {
         lasts.forEach(e => {lasts_string = `${lasts_string}
 Command : ${e.command} | Message : ${e.message} | Result : ${e.result}`})
 
+        let parsed = null
+
+        while(parsed == null){
+
             let generate_response = await this.Main_EasyAI.Generate(`You are a AI that will work into a nodejs project (so the most of things will be in javascript, but can make any terminal command or write in another languages) and will recive a 'User :' objective and will analyze the context of files (initial files and actual after modifications and creation),system commands and last commands and predict the next command line in this format -> {"action":"command","command":"","message":""} with a 'FINISH' word after the json 
 
 - Remember that you will predict only the json, nothing more than it, the text after 'AI :' tag will be only the json in the format described
@@ -94,9 +98,19 @@ ${lasts_string}
 User : ${prompt}
 AI : {"action"`,{stop : ['FINISH']})
 
+parsed = completeAndParseJSON(generate_response.full_text)
+
+if(parsed == null){console.log('Erro no parse, repetindo o Generate...')}
+
+    }
+
+console.log(parsed)
+
+
      //   }
 
-console.log(completeAndParseJSON(generate_response.full_text))
+
+
     
     }
 
