@@ -9,6 +9,7 @@ function System() {
     const windowsCommands = {
         'echo text > file.txt': 'Writes text to a file (overwrites existing content)',
         'echo text >> file.txt': 'Appends text to a file',
+        '.> File.js': 'Create a new file',
         'notepad file.txt': 'Opens the file in Notepad for editing',
         'mkdir': 'Creates a directory',
         'dir': 'Lists directory contents',
@@ -49,6 +50,7 @@ function System() {
     const linuxCommands = {
         'echo "text" > file.txt': 'Writes text to a file (overwrites existing content)',
         'echo "text" >> file.txt': 'Appends text to a file',
+        '.> File.js': 'Create a new file',
         'ls': 'Lists directory contents',
         'cp': 'Copies files and directories',
         'mv': 'Moves files and directories',
