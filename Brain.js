@@ -32,6 +32,8 @@ class Brain {
 
         let lasts_string = ''
 
+        let parsed = null
+        
         let command_object = {
             action : 'command',
             command : '',
@@ -46,7 +48,7 @@ Command : ${e.command} | Message : ${e.message} | Result : ${e.result}`})
         console.log(`Historico de Comandos : 
 ${lasts_string}`)}
 
-        let parsed = null
+        parsed = null
 
         while(parsed == null){
 
