@@ -5,6 +5,7 @@ import System from './core/System.js'
 import Terminal from './core/Terminal.js'
 import Framework from './core/Framework.js'
 import FrameworkCompare from './core/FrameworkCompare.js'
+import completeAndParseJSON from "./useful/CompleteAndParseJSON.js";
 
 class Brain {
     constructor(config = {easyai_url : 'api.easyai.com.br',start_path : ''}){
@@ -95,7 +96,7 @@ AI : {"action"`,{stop : ['FINISH']})
 
      //   }
 
-console.log(generate_response)
+console.log(completeAndParseJSON(generate_response.full_text))
     
     }
 
