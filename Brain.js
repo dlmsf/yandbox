@@ -13,7 +13,7 @@ class Brain {
         this.ActualPath = config.start_path || process.cwd()
         this.Main_EasyAI = new EasyAI({server_url : config.easyai_url})
         this.Terminal = Terminal
-        this.Framework = async (path = this.ActualPath,config = {ignore : ['node_modules'],ignoreStartsWith : ['.git']}) => {
+        this.Framework = async (path = this.ActualPath,config = {ignore : ['node_modules','package-lock.json'],ignoreStartsWith : ['.git']}) => {
             return await Framework(path,config)
         }
        
