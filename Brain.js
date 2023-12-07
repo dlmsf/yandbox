@@ -4,6 +4,7 @@ import path from 'path';
 import System from './core/System.js'
 import Terminal from './core/Terminal.js'
 import Framework from './core/Framework.js'
+import FrameworkCompare from './core/FrameworkCompare.js'
 
 class Brain {
     constructor(config = {easyai_url : 'api.easyai.com.br',start_path : ''}){
@@ -16,6 +17,7 @@ class Brain {
         this.Framework = async (path = this.ActualPath,config = {ignore : ['node_modules','package-lock.json'],ignoreStartsWith : ['.git']}) => {
             return await Framework(path,config)
         }
+        this.FrameworkCompare = FrameworkCompare
        
 
     }
