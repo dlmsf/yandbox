@@ -95,6 +95,8 @@ ${lasts_string}
 
 //Analyzing all the things above, now read the User objective and predict the JSON in format {"action":"command","command":"","message":""} after te 'AI :' tag, remember that you will predict only 1 JSON and stop, nothing more, and with FINISH word after the JSON
 
+- Remember that the only have 2 types to "action" propiety, command or stop
+
 User : ${prompt}
 AI : {"action"`,{stop : ['FINISH']})
 
