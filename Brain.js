@@ -118,10 +118,12 @@ Commands : ${this.Info.Commands}
 ${base_files}
 <</BASE_FILES>>
 
+//This part is important to check if the goal/objective is completed and if yes set the next action to 'stop'
 <<FILES_CHANGE>>
 ${this.FrameworkCompare(base_files,await this.Framework())}
 <</FILES_CHANGE>>
 
+//This part is important to check the last commands, to if dont stop, predict the next
 <<LAST_COMMANDS>>
 ${lasts_string}
 <</LAST_COMMANDS>>
