@@ -42,7 +42,7 @@ class Brain {
         lasts.forEach(e => {lasts_string = `${lasts_string}
 Command : ${e.command} | Message : ${e.message} | Result : ${e.result}`})
 
-            let generate_response = await this.Main_EasyAI.Generate(`You are a AI that will work into a nodejs project (so the most of things will be in javascript, but can make any terminal command or write in another languages) and will recive a 'User :' objective and will analyze the context of files (initial files and actual after modifications and creation),system commands and last commands and predict the next command line in this format -> {"action":"command","command":"","message":""} 
+            let generate_response = await this.Main_EasyAI.Generate(`You are a AI that will work into a nodejs project (so the most of things will be in javascript, but can make any terminal command or write in another languages) and will recive a 'User :' objective and will analyze the context of files (initial files and actual after modifications and creation),system commands and last commands and predict the next command line in this format -> {"action":"command","command":"","message":""} with a 'FINISH' word after the json 
 
 - Remember that you will predict only the json, nothing more than it, the text after 'AI :' tag will be only the json in the format described
 
@@ -51,7 +51,7 @@ The next tag <<EXAMPLE>>   <</EXAMPLE>> will demonstrate some examples, but all 
 // In the example below the user want a hello world, so the response is a action to write the console.log() in a file, the message field is a description of what will be made
 <<EXAMPLE>>
 User : Create a simple hello world
-AI : {"action":"command","command":"echo "console.log('hello world')" > index.js","message":"Writing a hello world in a index.js"}
+AI : {"action":"command","command":"echo "console.log('hello world')" > index.js","message":"Writing a hello world in a index.js"}FINISH
 <</EXAMPLE>>
 
 // Lets go to another example, that will be a continuation of the example above, after it be writed, this generation will run again but with modification ok, so the next action will be of type 'stop', the result is empty because this command dont have response in terminal, but if a command has a response will show in result field
@@ -66,7 +66,7 @@ console.log('hello world')
 <</LAST_COMMANDS>>
 
 User : Create a simple hello world
-AI : {"action":"stop","command":"" > index.js","message":"Hello world created successfully !"}
+AI : {"action":"stop","command":"" > index.js","message":"Hello world created successfully !"}FINISH
 <</EXAMPLE>>
 
 //Below is not more example, real aplication
@@ -88,10 +88,10 @@ ${this.FrameworkCompare(base_files,await this.Framework())}
 ${lasts_string}
 <</LAST_COMMANDS>>
 
-//Analyzing all the things above, now read the User objective and predict the JSON in format {"action":"command","command":"","message":""} after te 'AI :' tag, remember that you will predict only 1 JSON and stop, nothing mor
+//Analyzing all the things above, now read the User objective and predict the JSON in format {"action":"command","command":"","message":""} after te 'AI :' tag, remember that you will predict only 1 JSON and stop, nothing more, and with FINISH word after the JSON
 
 User : ${prompt}
-AI : {"action"`,{stop : ['}']})
+AI : {"action"`,{stop : ['FINISH']})
 
      //   }
 
