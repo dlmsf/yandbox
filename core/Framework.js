@@ -1,19 +1,11 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url'
+import { fileURLToPath } from 'url';
 
 function getCurrentDirectory() {
     return path.dirname(fileURLToPath(import.meta.url));
 }
 
-/**
- * Check if a file or directory should be ignored based on the config
- * @param {string} relativeFilePath - The relative path of the file.
- * @param {Object} config - The configuration object.
- * @param {string[]} [config.ignore] - Array of file paths to ignore.
- * @param {string[]} [config.ignoreStartsWith] - Array of prefixes to ignore files that start with them.
- * @returns {boolean} - Returns true if the file should be ignored.
- */
 function shouldIgnore(relativeFilePath, config) {
     if (config.ignore && config.ignore.includes(relativeFilePath)) {
         return true;
@@ -24,15 +16,14 @@ function shouldIgnore(relativeFilePath, config) {
     return false;
 }
 
-/**
- * Recursively reads files from a directory, considering ignore rules.
- * @param {string} directory - The directory path.
- * @param {string} baseFolder - The base folder path for relative calculations.
- * @param {Object} config - The configuration object.
- * @param {string[]} output - The output array to accumulate file contents.
- */
 async function readFiles(directory, baseFolder, config, output) {
     const files = await fs.readdir(directory);
+
+    if (files.length === 0) {
+        // Add an entry for an empty directory
+        output.push(`//${path.relative(baseFolder, directory)} - Empty Directory\n`);
+        return;
+    }
 
     for (const file of files) {
         const relativeFilePath = path.relative(baseFolder, path.join(directory, file));
@@ -53,14 +44,6 @@ async function readFiles(directory, baseFolder, config, output) {
     }
 }
 
-/**
- * Reads files from the given folder path, ignoring specified files.
- * @param {string} folderPath - The path to the folder.
- * @param {Object} config - The configuration object.
- * @param {string[]} [config.ignore] - Array of file paths to ignore.
- * @param {string[]} [config.ignoreStartsWith] - Array of prefixes to ignore files that start with them.
- * @returns {Promise<string>} - A promise that resolves to the concatenated file contents.
- */
 async function Framework(folderPath = getCurrentDirectory(), config = {}) {
     let output = [];
 

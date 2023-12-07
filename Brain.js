@@ -82,6 +82,7 @@ AI : {"action":"stop","command":"" > index.js","message":"Hello world created su
 <<SYSTEM_INFORMATION>>
 System : ${this.Info.System}
 Commands : ${this.Info.Commands}
+- Note : cd command only will work if the next command stay in the same command line with &&, example : 'cd folder1 && .> test.js'
 <</SYSTEM_INFORMATION>>
 
 <<BASE_FILES>>
