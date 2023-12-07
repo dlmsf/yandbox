@@ -21,6 +21,10 @@ class Brain {
     }
 
     Do(prompt = 'Create a nodejs hello world',config = {}){
+
+        let lasts = [{command : '',result : ''}]
+        lasts.splice(0,1)
+
         console.log('Hello World')
     }
 
