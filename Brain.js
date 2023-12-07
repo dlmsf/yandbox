@@ -38,10 +38,13 @@ class Brain {
             message : ''
         }
 
-    //    while(command_object.action != 'stop'){
+     while(command_object.action != 'stop'){
 
         lasts.forEach(e => {lasts_string = `${lasts_string}
 Command : ${e.command} | Message : ${e.message} | Result : ${e.result}`})
+        if(lasts_string){
+        console.log(`Historico de Comandos : 
+${lasts_string}`)}
 
         let parsed = null
 
@@ -106,10 +109,20 @@ if(parsed == null){console.log('Erro no parse, repetindo o Generate...')}
 
     }
 
-console.log(parsed)
+//console.log(parsed)
+
+command_object = parsed
+
+if(command_object.action == 'command'){
+    let terminalresult = await this.Terminal.Do(command_object.command)
+    lasts.push({command : command_object.command,message : command_object.message,result : terminalresult})
+}
 
 
-     //   }
+
+}
+
+console.log('Objetivo concluido !')
 
 
 
