@@ -56,28 +56,55 @@ ${lasts_string}`)}
 
 The next tag <<EXAMPLE>>   <</EXAMPLE>> will demonstrate some examples, but all simple, you will need consider the files,commands and last commands to predict the next to achieve the user goal
 
-// In the example below the user want a hello world, so the response is a action to write the console.log() in a file, the message field is a description of what will be made
-<<EXAMPLE>>
-User : Create a simple hello world
-AI : {"action":"command","command":"echo "console.log('hello world')" > index.js","message":"Writing a hello world in a index.js"}FINISH
-<</EXAMPLE>>
+// Example Section with Detailed Scenarios for Windows Machine
+            // These examples demonstrate how the AI should handle user demands on a Windows machine, taking into account the sequence of prompts.
 
-// Lets go to another example, that will be a continuation of the example above, after it be writed, this generation will run again but with modification ok, so the next action will be of type 'stop', the result is empty because this command dont have response in terminal, but if a command has a response will show in result field
-<<EXAMPLE>>
-<<FILES_CHANGE>>
-index.js - New File
-console.log('hello world')
-<</FILES_CHANGE>>
+            // Example 1: Single Command Task
+            // This shows a task achievable with one command. The AI should recognize when the task is complete.
+            <<EXAMPLE>>
+            User : Delete 'temp.txt'
+            AI : {"action":"command","command":"del temp.txt","message":"Deleting 'temp.txt'"}FINISH
+            // After execution, the AI receives updated Files Change and Last Commands
+            <<FILES_CHANGE>>
+            temp.txt - Deleted
+            <</FILES_CHANGE>>
+            <<LAST_COMMANDS>>
+            - Command : del temp.txt | Message : Deleting 'temp.txt' | Result :
+            <</LAST_COMMANDS>>
+            // The AI interprets the changes and concludes the task.
+            User : Delete 'temp.txt'
+            AI : {"action":"stop","command":"","message":"File 'temp.txt' deleted successfully"}FINISH
+            <</EXAMPLE>>
 
-<<LAST_COMMANDS>>
-- Command : echo "console.log('hello world')" > index.js | Message : Writing a hello world in a index.js | Result : 
-<</LAST_COMMANDS>>
+            // Example 2: Multi-Command Task
+            // This example requires multiple steps. The AI suggests commands step-by-step until the goal is achieved.
+            <<EXAMPLE>>
+            User : Set up a basic server in 'server.js'
+            AI : {"action":"command","command":"type NUL > server.js","message":"Creating 'server.js' file"}FINISH
+            // After execution, the AI receives updated Files Change and Last Commands
+            <<FILES_CHANGE>>
+            server.js - New File
+            <</FILES_CHANGE>>
+            <<LAST_COMMANDS>>
+            - Command : type NUL > server.js | Message : Creating 'server.js' file | Result :
+            <</LAST_COMMANDS>>
+            // The AI evaluates the changes and suggests the next step.
+            User : Set up a basic server in 'server.js'
+            AI : {"action":"command","command":"echo const express = require('express'); const app = express(); app.listen(3000); > server.js","message":"Adding basic server setup to 'server.js'"}FINISH
+            <<FILES_CHANGE>>
+            server.js - Modified
+            <</FILES_CHANGE>>
+            <<LAST_COMMANDS>>
+            - Command : echo const express = require('express'); const app = express(); app.listen(3000); > server.js | Message : Adding basic server setup to 'server.js' | Result :
+            <</LAST_COMMANDS>>
+            // Finally, the AI determines that the user's goal has been met.
+            User : Set up a basic server in 'server.js'
+            AI : {"action":"stop","command":"","message":"Basic server in 'server.js' set up successfully"}FINISH
+            <</EXAMPLE>>
 
-User : Create a simple hello world
-AI : {"action":"stop","command":"" > index.js","message":"Hello world created successfully !"}FINISH
-<</EXAMPLE>>
+            // These examples are specifically for a Windows environment. They demonstrate the AI's capability to understand the sequential nature of command execution and file changes, adapting its responses accordingly.
 
-//Below is not more example, real aplication
+//Below starts a real cenario
 
 <<SYSTEM_INFORMATION>>
 System : ${this.Info.System}
