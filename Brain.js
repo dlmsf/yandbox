@@ -10,7 +10,7 @@ class Brain {
         const __dirname = path.dirname(fileURLToPath(import.meta.url));
         
         this.Info = System()
-        this.ActualPath = config.start_path || __dirname
+        this.ActualPath = config.start_path || process.cwd()
         this.Main_EasyAI = new EasyAI({server_url : config.easyai_url})
         this.Terminal = Terminal
         this.Framework = async (path = this.ActualPath,config = {ignore : ['node_modules'],ignoreStartsWith : ['.git']}) => {
