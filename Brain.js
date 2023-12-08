@@ -59,52 +59,52 @@ ${lasts_string}`)}
 The next tag <<EXAMPLE>>   <</EXAMPLE>> will demonstrate some examples, but all simple, you will need consider the files,commands and last commands to predict the next to achieve the user goal
 
 // Example Section with Detailed Scenarios for Windows Machine
-            // These examples demonstrate how the AI should handle user demands on a Windows machine, taking into account the sequence of prompts.
+// These examples demonstrate how the AI should handle user demands on a Windows machine, taking into account the sequence of prompts.
 
-            // Example 1: Single Command Task
-            // This shows a task achievable with one command. The AI should recognize when the task is complete.
-            <<EXAMPLE>>
-            User : Delete 'temp.txt'
-            AI : {"action":"command","command":"del temp.txt","message":"Deleting 'temp.txt'"}FINISH
-            // After execution, the AI receives updated Files Change and Last Commands
-            <<FILES_CHANGE>>
-            temp.txt - Deleted
-            <</FILES_CHANGE>>
-            <<LAST_COMMANDS>>
-            - Command : del temp.txt | Message : Deleting 'temp.txt' | Result :
-            <</LAST_COMMANDS>>
-            // The AI interprets the changes and concludes the task.
-            User : Delete 'temp.txt'
-            AI : {"action":"stop","command":"","message":"File 'temp.txt' deleted successfully"}FINISH
-            <</EXAMPLE>>
+// Example 1: Single Command Task
+// This shows a task achievable with one command. The AI should recognize when the task is complete.
+<<EXAMPLE>>
+User : Delete 'temp.txt'
+AI : {"action":"command","command":"del temp.txt","message":"Deleting 'temp.txt'"}FINISH
+// After execution, the AI receives updated Files Change and Last Commands
+<<FILES_CHANGE>>
+temp.txt - Deleted
+<</FILES_CHANGE>>
+<<LAST_COMMANDS>>
+- Command : del temp.txt | Message : Deleting 'temp.txt' | Result :
+<</LAST_COMMANDS>>
+// The AI interprets the changes and concludes the task.
+User : Delete 'temp.txt'
+AI : {"action":"stop","command":"","message":"File 'temp.txt' deleted successfully"}FINISH
+<</EXAMPLE>>
 
-            // Example 2: Multi-Command Task
-            // This example requires multiple steps. The AI suggests commands step-by-step until the goal is achieved.
-            <<EXAMPLE>>
-            User : Set up a basic server in 'server.js'
-            AI : {"action":"command","command":"type NUL > server.js","message":"Creating 'server.js' file"}FINISH
-            // After execution, the AI receives updated Files Change and Last Commands
-            <<FILES_CHANGE>>
-            server.js - New File
-            <</FILES_CHANGE>>
-            <<LAST_COMMANDS>>
-            - Command : type NUL > server.js | Message : Creating 'server.js' file | Result :
-            <</LAST_COMMANDS>>
-            // The AI evaluates the changes and suggests the next step.
-            User : Set up a basic server in 'server.js'
-            AI : {"action":"command","command":"echo const express = require('express'); const app = express(); app.listen(3000); > server.js","message":"Adding basic server setup to 'server.js'"}FINISH
-            <<FILES_CHANGE>>
-            server.js - Modified
-            <</FILES_CHANGE>>
-            <<LAST_COMMANDS>>
-            - Command : echo const express = require('express'); const app = express(); app.listen(3000); > server.js | Message : Adding basic server setup to 'server.js' | Result :
-            <</LAST_COMMANDS>>
-            // Finally, the AI determines that the user's goal has been met.
-            User : Set up a basic server in 'server.js'
-            AI : {"action":"stop","command":"","message":"Basic server in 'server.js' set up successfully"}FINISH
-            <</EXAMPLE>>
+// Example 2: Multi-Command Task
+// This example requires multiple steps. The AI suggests commands step-by-step until the goal is achieved.
+<<EXAMPLE>>
+User : Set up a basic server in 'server.js'
+AI : {"action":"command","command":"type NUL > server.js","message":"Creating 'server.js' file"}FINISH
+// After execution, the AI receives updated Files Change and Last Commands
+<<FILES_CHANGE>>
+server.js - New File
+<</FILES_CHANGE>>
+<<LAST_COMMANDS>>
+- Command : type NUL > server.js | Message : Creating 'server.js' file | Result :
+<</LAST_COMMANDS>>
+// The AI evaluates the changes and suggests the next step.
+User : Set up a basic server in 'server.js'
+AI : {"action":"command","command":"echo const express = require('express'); const app = express(); app.listen(3000); > server.js","message":"Adding basic server setup to 'server.js'"}FINISH
+<<FILES_CHANGE>>
+server.js - Modified
+<</FILES_CHANGE>>
+<<LAST_COMMANDS>>
+- Command : echo const express = require('express'); const app = express(); app.listen(3000); > server.js | Message : Adding basic server setup to 'server.js' | Result :
+<</LAST_COMMANDS>>
+// Finally, the AI determines that the user's goal has been met.
+User : Set up a basic server in 'server.js'
+AI : {"action":"stop","command":"","message":"Basic server in 'server.js' set up successfully"}FINISH
+<</EXAMPLE>>
 
-            // These examples are specifically for a Windows environment. They demonstrate the AI's capability to understand the sequential nature of command execution and file changes, adapting its responses accordingly.
+// These examples are specifically for a Windows environment. They demonstrate the AI's capability to understand the sequential nature of command execution and file changes, adapting its responses accordingly.
 
 //Below starts a real cenario
 
