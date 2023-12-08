@@ -42,10 +42,12 @@ class Brain {
 
      while(command_object.action != 'stop'){
 
-        lasts.forEach(e => {lasts_string = `${lasts_string}
-Command : ${e.command} | Message : ${e.message} | Result : ${e.result}`})
+        lasts_string = ''
+
+        lasts.forEach((e,i)=> {lasts_string = `${lasts_string}${i+1}° - Command : ${e.command} | Message : ${e.message} | Result : ${e.result}
+`})
         if(lasts_string){
-        console.log(`Historico de Comandos : 
+        console.log(`< Historico de Comandos > 
 ${lasts_string}`)}
 
         parsed = null
