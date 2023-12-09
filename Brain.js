@@ -23,7 +23,7 @@ class Brain {
 
     }
 
-    async Do(prompt = 'Create a nodejs hello world',config = {}){
+    async Do(prompt = 'Create a nodejs hello world',config = {openai : false}){
 
         const base_files = await this.Framework()
 
@@ -135,7 +135,7 @@ ${lasts_string}
 - Remember that the only have 2 types to "action" propiety, command or stop
 
 User : ${prompt}
-AI : {"action"`,{stop : ['FINISH']})
+AI : {"action"`,{stop : ['FINISH'],openai : config.openai,max_tokens : 1000})
 
 parsed = completeAndParseJSON(generate_response.full_text)
 
