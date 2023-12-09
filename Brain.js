@@ -8,12 +8,12 @@ import FrameworkCompare from './core/FrameworkCompare.js'
 import completeAndParseJSON from "./useful/CompleteAndParseJSON.js";
 
 class Brain {
-    constructor(config = {easyai_url : 'api.easyai.com.br',start_path : ''}){
+    constructor(config = {easyai_url : 'api.easyai.com.br',start_path : '',openai_token : ''}){
         const __dirname = path.dirname(fileURLToPath(import.meta.url));
         
         this.Info = System()
         this.ActualPath = config.start_path || process.cwd()
-        this.Main_EasyAI = new EasyAI({server_url : config.easyai_url})
+        this.Main_EasyAI = new EasyAI({server_url : config.easyai_url,openai_token : config.openai_token})
         this.Terminal = Terminal
         this.Framework = async (path = this.ActualPath,config = {ignore : ['node_modules','package-lock.json'],ignoreStartsWith : ['.git']}) => {
             return await Framework(path,config)
