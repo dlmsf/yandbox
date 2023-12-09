@@ -11,6 +11,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@massudy/easyai": "^0.3.10"
+    "@massudy/easyai": "^0.3.11"
   }
 }
