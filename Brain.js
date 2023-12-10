@@ -22,7 +22,7 @@ class Brain {
 
         if(possible){
 
-        //WorkorCreate() | Define se a IA irá trabalhar em um ambiente/projeto já existente ou irá criar do zero
+        //WorkType() | Define se a IA irá trabalhar em um ambiente/projeto já existente ou irá criar do zero
         //Context() | Cria um contexto para o objetivo baseado
         //Instruct() | Quebra objetivo em varias ações
         //Run() | executa a array de ações
