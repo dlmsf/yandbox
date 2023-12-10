@@ -9,19 +9,32 @@ class Brain {
    static async Do(goal = 'Create a nodejs hello world',config = {server_url : 'api.easyai.com.br',openai_token : '',openai : false}){
         if(config.openai && !config.openai_token){config.openai_token = process.env.OPENAI_TOKEN || ''}
 
+        let objreturn = {
+            done : false,
+            message : ''
+        }
         const runpath = process.cwd()
 
         console.log(`Starting goal in ${runpath}`)
         
         const possible = await Brain.Possible(goal,config) // Verifica se é algo tangível, não da para construir um avião só utilizando o terminal rs
         console.log(`Possible : ${possible}`)
-        
+
+        if(possible){
+
         //WorkorCreate() | Define se a IA irá trabalhar em um ambiente/projeto já existente ou irá criar do zero
         //Context() | Cria um contexto para o objetivo baseado
         //Instruct() | Quebra objetivo em varias ações
         //Run() | executa a array de ações
 
-        console.log('Objetivo Concluído !')
+            objreturn.done = true
+            console.log('Objetivo Concluído !')
+        } else {
+            console.log('Não foi possível concluir o objetivo')
+            objreturn.message = 'Objetivo não é computacionalmente possível'
+        }
+
+        return objreturn
     }
 
     static async Parser(json,config = {server_url : 'api.easyai.com.br',openai_token : '',openai : false}){
