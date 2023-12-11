@@ -9,6 +9,9 @@ class Brain {
    static async Do(goal = 'Create a nodejs hello world',config = {server_url : 'api.easyai.com.br',openai_token : '',openai : false}){
         if(config.openai && !config.openai_token){config.openai_token = process.env.OPENAI_TOKEN || ''}
 
+        // !!!!!!!!!!! interessante o do vim com StructurePrompt : <> | CodePrompt : <>
+
+
         let objreturn = {
             done : false,
             message : ''
@@ -21,6 +24,20 @@ class Brain {
         console.log(`Possible : ${possible}`)
 
         if(possible){
+
+
+        //const structurerun = await StructureRun() // carrega o prompt para gerar a array de ações que vai gerar a estrutura
+        //StructureAction(structurrun)
+        // O Generate do Code já vai ter toda a filetree e framework completo e a array de structure que foi feita as ações para definir o que vai ser criado de código
+        //const coderun = await CodeRun() // carrega o prompt + framework + filetree + struture run e gera a array de ações de código {prompt : <>,exist : <boolean>}, onde serão  
+        /*
+        forEach(e => {
+
+        })
+        SearchExamples()
+        */
+
+
 
         //WorkType() | Define se a IA irá trabalhar em um ambiente/projeto já existente ou irá criar do zero
         //Context() | Cria um contexto para o objetivo baseado
