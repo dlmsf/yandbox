@@ -1,4 +1,4 @@
-# Brain - AGI com comportamento de ensinamento humano e sem fine-tune
+# Brain - AGI 100% conversacional
 
 ## Install
 ```
