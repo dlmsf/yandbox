@@ -1,4 +1,4 @@
-# Brain - AGI 100% conversacional
+# Brain - Minimalist AGI
 
 ## Install
 ```
