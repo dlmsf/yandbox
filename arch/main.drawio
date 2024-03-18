@@ -1,11 +1,47 @@
-<mxfile host="Electron" modified="2024-03-18T20:10:36.528Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/22.0.3 Chrome/114.0.5735.289 Electron/25.8.4 Safari/537.36" etag="caloB-uzc58XkWJhMfxB" version="22.0.3" type="device">
+<mxfile host="Electron" modified="2024-03-18T23:43:07.145Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/22.0.3 Chrome/114.0.5735.289 Electron/25.8.4 Safari/537.36" etag="1d5e22d-o9HZjfNuI07k" version="22.0.3" type="device">
   <diagram name="Página-1" id="awlEozZUAiN-Lm3G1otv">
-    <mxGraphModel dx="819" dy="482" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+    <mxGraphModel dx="1395" dy="703" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
         <mxCell id="Gksi0NrbBJDkTYxWEhex-2" value="" style="shape=actor;whiteSpace=wrap;html=1;" vertex="1" parent="1">
-          <mxGeometry x="400" y="110" width="40" height="60" as="geometry" />
+          <mxGeometry x="370" y="180" width="46" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Gksi0NrbBJDkTYxWEhex-27" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="Gksi0NrbBJDkTYxWEhex-8" target="Gksi0NrbBJDkTYxWEhex-11">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="Gksi0NrbBJDkTYxWEhex-8" value="Brain.Chat{}" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="230" y="340" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Gksi0NrbBJDkTYxWEhex-10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.495;entryY=-0.068;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" source="Gksi0NrbBJDkTYxWEhex-2" target="Gksi0NrbBJDkTYxWEhex-8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="Gksi0NrbBJDkTYxWEhex-11" value="Brain" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="320" y="500" width="140" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="Gksi0NrbBJDkTYxWEhex-25" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Gksi0NrbBJDkTYxWEhex-17" target="Gksi0NrbBJDkTYxWEhex-2">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="493" y="200" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="493" y="280" />
+              <mxPoint x="494" y="280" />
+              <mxPoint x="494" y="210" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Gksi0NrbBJDkTYxWEhex-17" value="Brain.View{}" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="433" y="340" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Gksi0NrbBJDkTYxWEhex-20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Gksi0NrbBJDkTYxWEhex-11">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="493" y="400" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Gksi0NrbBJDkTYxWEhex-22" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="Gksi0NrbBJDkTYxWEhex-21" target="Gksi0NrbBJDkTYxWEhex-8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="Gksi0NrbBJDkTYxWEhex-21" value="WireChat()" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="20" y="340" width="120" height="60" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
