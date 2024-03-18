@@ -1,15 +1,19 @@
-# Brain - Minimalist AGI
+# Brain
 
-## Install
+🔧 ```npm install -g @massudy/brain```
+
+‎🌎 ```brain```
+
+# Default Usage
 ```
 npm install @massudy/brain
 ```
 
-## Usage
+## Getting Started
 
 ```
 import Brain from '@massudy/brain'
 
-brain = new Brain()
+const brain = new Brain()
 ```
 
