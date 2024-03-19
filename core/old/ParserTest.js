@@ -1,4 +1,4 @@
-import Brain from '../Brain.js'
+import Brain from '../../Brain.js'
 
 let veryWrongJson = `{
     "empresa": "Tecnologia Avançada SA,
