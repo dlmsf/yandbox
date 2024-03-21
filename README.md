@@ -10,7 +10,6 @@ npm install @massudy/brain
 ```
 
 ## Getting Started
-
 ```
 import Brain from '@massudy/brain'
 
