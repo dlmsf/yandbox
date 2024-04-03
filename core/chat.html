@@ -143,6 +143,8 @@
 </div>
 
 <script>
+    let currentAiMessageDiv = null; // Keep track of the current AI message div
+
     const chatIcon = document.getElementById('chat-icon');
     const closeIcon = document.getElementById('close-icon');
     const chatBox = document.getElementById('chat-box');
@@ -150,13 +152,13 @@
 
     chatIcon.addEventListener('click', () => {
         chatBox.style.display = 'flex';
-        chatIcon.style.display = 'none'; // Hide chat icon when chat box is open
-        closeIcon.style.display = 'block'; // Show close icon only when chat box is open
+        chatIcon.style.display = 'none';
+        closeIcon.style.display = 'block';
     });
 
     closeIcon.addEventListener('click', () => {
         chatBox.style.display = 'none';
-        chatIcon.style.display = 'flex'; // Show chat icon when chat box is closed
+        chatIcon.style.display = 'flex';
     });
 
     document.getElementById('send-button').addEventListener('click', sendMessage);
@@ -167,24 +169,71 @@
         }
     });
 
-    function sendMessage() {
+    async function sendMessage() {
         const input = chatInput.value.trim();
         if (!input) return;
-        chatInput.value = '';
         displayMessage(`You: ${input}`, 'user');
-        // Placeholder for server response
-        displayMessage(`AI: Echoing - ${input}`, 'ai');
+        chatInput.value = '';
+
+        // Reset the AI message div for a new response
+        currentAiMessageDiv = null; 
+
+        await fetch('/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: input }),
+        });
+
+        pollForMessages(); // Start polling for responses
     }
 
-    function displayMessage(message, sender) {
+    function pollForMessages() {
+        fetch('/poll')
+            .then(response => {
+                if (response.status === 204) {
+                    setTimeout(pollForMessages, 200); // Poll every second if no content
+                } else {
+                    return response.json();
+                }
+            })
+            .then(data => {
+                if (data && data.message) {
+                    if (!currentAiMessageDiv) {
+                        // First token of a new AI message
+                        currentAiMessageDiv = createAiMessageDiv();
+                    }
+                    // Append the new token to the current AI message
+                    currentAiMessageDiv.textContent += ` ${data.message}`;
+                    setTimeout(pollForMessages, 200); // Continue polling after displaying a token
+                }
+            })
+            .catch(console.error);
+    }
+
+    function createAiMessageDiv() {
         const chatContent = document.getElementById('chat-content');
         const messageDiv = document.createElement('div');
         messageDiv.classList.add('chat-message');
-        messageDiv.textContent = message;
+        messageDiv.textContent = 'AI:'; // Initialize AI message prefix
         chatContent.appendChild(messageDiv);
         chatContent.scrollTop = chatContent.scrollHeight;
+        return messageDiv;
+    }
+
+    function displayMessage(message, sender) {
+        if (sender !== 'ai') {
+            const chatContent = document.getElementById('chat-content');
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('chat-message');
+            messageDiv.textContent = message;
+            chatContent.appendChild(messageDiv);
+            chatContent.scrollTop = chatContent.scrollHeight;
+        }
     }
 </script>
+
+
+
 
 </body>
 </html>
