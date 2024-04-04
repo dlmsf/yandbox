@@ -1,52 +1,40 @@
+// Brain.js
 import http from 'http';
+import { WebSocketServer } from 'ws';
 import { readFileSync } from 'fs';
-import url from 'url';
 
 class Brain {
     constructor(processInputFunction) {
         this.processInputFunction = processInputFunction;
-        this.messageQueue = []; // Queue of message tokens to be sent to the client
-
-        this.httpServer = http.createServer((req, res) => this.handleRequest(req, res));
+        this.initServer();
     }
 
-    async handleRequest(request, response) {
-        const parsedUrl = url.parse(request.url, true);
-
-        if (parsedUrl.pathname === '/') {
-            const chatHtml = readFileSync('./core/chat.html').toString();
-            const blankHtml = readFileSync('./core/blank.html').toString();
-            response.writeHead(200, { 'Content-Type': 'text/html' });
-            response.end(blankHtml + chatHtml);
-        } else if (parsedUrl.pathname === '/send') {
-            let body = '';
-            request.on('data', chunk => body += chunk.toString());
-            request.on('end', async () => {
-                const { message } = JSON.parse(body);
-                // Process the input and populate the queue
-                await this.processInputFunction(message, (responseMessage) => {
-                    this.messageQueue.push(...responseMessage.split(" ")); // Splitting message into tokens
-                });
-                response.writeHead(204); // No content to send back immediately
-                response.end();
-            });
-        } else if (parsedUrl.pathname === '/poll') {
-            if (this.messageQueue.length > 0) {
-                const message = this.messageQueue.shift(); // Get the next token
-                response.writeHead(200, { 'Content-Type': 'application/json' });
-                response.end(JSON.stringify({ message }));
-            } else {
-                response.writeHead(204); // No content if the queue is empty
-                response.end();
+    initServer() {
+        const server = http.createServer((req, res) => {
+            // Serve the combined HTML (blank.html + chat.html)
+            if (req.url === '/') {
+                const chatHtml = readFileSync('./core/chat.html').toString();
+                const blankHtml = readFileSync('./core/blank.html').toString();
+                res.writeHead(200, { 'Content-Type': 'text/html' });
+                res.end(blankHtml + chatHtml);
+                return;
             }
-        } else {
-            response.writeHead(404);
-            response.end();
-        }
-    }
+            res.writeHead(404);
+            res.end();
+        });
 
-    listen(port = 3000) {
-        this.httpServer.listen(port, () => console.log(`Server listening on port ${port}`));
+        const wss = new WebSocketServer({ server });
+
+        wss.on('connection', ws => {
+            ws.on('message', async message => {
+                // Process the input and send back responses token by token
+                await this.processInputFunction(message, async (responseToken) => {
+                    ws.send(responseToken); // Send each token back to the client
+                });
+            });
+        });
+
+        server.listen(3000, () => console.log(`Server and WebSocket listening on port 3000`));
     }
 }
 

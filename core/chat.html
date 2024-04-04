@@ -143,131 +143,75 @@
 </div>
 
 <script>
-    let currentAiMessageDiv = null;
-    let isProcessing = false;
-    let debounceTimer;
-
-    const chatIcon = document.getElementById('chat-icon');
-    const closeIcon = document.getElementById('close-icon');
-    const chatBox = document.getElementById('chat-box');
-    const chatInput = document.getElementById('chat-input');
-    const sendButton = document.getElementById('send-button');
-
-    chatIcon.addEventListener('click', () => {
-        chatBox.style.display = 'flex';
-        chatIcon.style.display = 'none';
-        closeIcon.style.display = 'block';
-    });
-
-    closeIcon.addEventListener('click', () => {
-        chatBox.style.display = 'none';
-        chatIcon.style.display = 'flex';
-    });
-
-    sendButton.addEventListener('click', () => debounceSend(sendMessage));
-    chatInput.addEventListener('keypress', function(event) {
-        if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
-            debounceSend(sendMessage);
-        }
-    });
-
-    function debounceSend(action, delay = 300) {
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-            if (!isProcessing) action();
-        }, delay);
-    }
-
-    async function sendMessage() {
-        const input = chatInput.value.trim();
-        if (!input) return;
-
-        isProcessing = true;
-        disableInput();
-
-        displayMessage(`You: ${input}`, 'user');
-        chatInput.value = '';
-
-        currentAiMessageDiv = null;
-
-        await fetch('/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: input }),
-        });
-
-        pollForMessages();
-    }
-
-    function pollForMessages() {
-        fetch('/poll')
-            .then(response => {
-                if (response.status === 204) {
-                    setTimeout(pollForMessages, 200);
-                } else {
-                    return response.json();
-                }
-            })
-            .then(data => {
-                if (data && data.message) {
-                    if (!currentAiMessageDiv) {
-                        currentAiMessageDiv = createAiMessageDiv();
-                    }
-                    currentAiMessageDiv.textContent += ` ${data.message}`;
-                    setTimeout(pollForMessages, 200);
-                } else {
-                    isProcessing = false;
-                    enableInput();
-                }
-            })
-            .catch(error => {
-                console.error(error);
-                isProcessing = false;
-                enableInput();
-            });
-    }
-
-    function disableInput() {
-        chatInput.disabled = true;
-        sendButton.disabled = true;
-        document.body.style.cursor = 'wait'; // Change cursor to indicate waiting
-    }
-
-    function enableInput() {
-        chatInput.disabled = false;
-        sendButton.disabled = false;
-        document.body.style.cursor = 'default'; // Reset cursor
-        chatInput.focus();
-    }
-
-    function createAiMessageDiv() {
+    document.addEventListener('DOMContentLoaded', () => {
+        const chatIcon = document.getElementById('chat-icon');
+        const closeIcon = document.getElementById('close-icon');
+        const chatBox = document.getElementById('chat-box');
+        const chatInput = document.getElementById('chat-input');
+        const sendButton = document.getElementById('send-button');
         const chatContent = document.getElementById('chat-content');
-        const messageDiv = document.createElement('div');
-        messageDiv.classList.add('chat-message');
-        messageDiv.textContent = 'AI:';
-        chatContent.appendChild(messageDiv);
-        chatContent.scrollTop = chatContent.scrollHeight;
-        return messageDiv;
-    }
-
-    function displayMessage(message, sender) {
-        if (sender !== 'ai') {
-            const chatContent = document.getElementById('chat-content');
+    
+        const ws = new WebSocket('ws://localhost:3000');
+    
+        ws.onopen = () => {
+            console.log('WebSocket connection established');
+        };
+    
+        ws.onmessage = (event) => {
+            if (!aiMessageContainer) {
+                aiMessageContainer = document.createElement('div');
+                aiMessageContainer.classList.add('chat-message');
+                aiMessageContainer.textContent = 'AI:';
+                chatContent.appendChild(aiMessageContainer);
+            }
+    
+            // Assuming the use of a specific end message token isn't viable, as per your setup.
+            aiMessageContainer.textContent += ` ${event.data}`;
+            chatContent.scrollTop = chatContent.scrollHeight;
+        };
+    
+        chatIcon.addEventListener('click', () => {
+            chatBox.style.display = 'flex';
+            chatIcon.style.display = 'none';
+            closeIcon.style.display = 'block';
+        });
+    
+        closeIcon.addEventListener('click', () => {
+            chatBox.style.display = 'none';
+            chatIcon.style.display = 'flex';
+        });
+    
+        let aiMessageContainer = null; // Initialize outside to be accessible in sendMessage and ws.onmessage
+    
+        const sendMessage = () => {
+            const message = chatInput.value.trim();
+            if (message) {
+                ws.send(message);
+                displayMessage(`You: ${message}`, 'user');
+                chatInput.value = '';
+                aiMessageContainer = null; // Ensure a new container for AI messages starts with each new user message
+            }
+        };
+    
+        sendButton.addEventListener('click', sendMessage);
+    
+        chatInput.addEventListener('keypress', (event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        });
+    
+        function displayMessage(message, sender) {
             const messageDiv = document.createElement('div');
             messageDiv.classList.add('chat-message');
             messageDiv.textContent = message;
             chatContent.appendChild(messageDiv);
             chatContent.scrollTop = chatContent.scrollHeight;
         }
-    }
-</script>
-
-
-
-
-
-
+    });
+    </script>
+    
 
 </body>
 </html>
