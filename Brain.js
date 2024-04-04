@@ -11,7 +11,6 @@ class Brain {
 
     initServer() {
         const server = http.createServer((req, res) => {
-            // Serve the combined HTML (blank.html + chat.html)
             if (req.url === '/') {
                 const chatHtml = readFileSync('./core/chat.html').toString();
                 const blankHtml = readFileSync('./core/blank.html').toString();
@@ -27,10 +26,10 @@ class Brain {
 
         wss.on('connection', ws => {
             ws.on('message', async message => {
-                // Process the input and send back responses token by token
                 await this.processInputFunction(message, async (responseToken) => {
                     ws.send(responseToken); // Send each token back to the client
                 });
+                ws.send("END_OF_RESPONSE"); // Signal the end of response processing
             });
         });
 
