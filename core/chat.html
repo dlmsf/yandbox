@@ -177,12 +177,12 @@
     if (!aiMessageContainer) {
         aiMessageContainer = document.createElement('div');
         aiMessageContainer.classList.add('chat-message');
-        aiMessageContainer.textContent = 'AI:';
+        aiMessageContainer.textContent = 'AI:'; // Initialize AI label
         chatContent.appendChild(aiMessageContainer);
     }
 
-    // Append received data to the AI message container
-    aiMessageContainer.textContent += ` ${event.data}`;
+    // Directly concatenate received token to the AI message container without adding space
+    aiMessageContainer.textContent += event.data; // Direct concatenation here
     chatContent.scrollTop = chatContent.scrollHeight;
 };
 
