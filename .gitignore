@@ -1,5 +1,5 @@
 node_modules
 .env
-./chat.html
-./main.html
+/chat.html
+/main.html
 test.js

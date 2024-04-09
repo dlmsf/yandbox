@@ -1,21 +1,36 @@
-// Brain.js
 import http from 'http';
 import { WebSocketServer } from 'ws';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync, copyFileSync } from 'fs';
+import path from 'path';
 
 class Brain {
     constructor(processInputFunction) {
         this.processInputFunction = processInputFunction;
+        this.ensureBaseFiles();
         this.initServer();
+    }
+
+    ensureBaseFiles() {
+        const files = ['chat.html', 'main.html'];
+        files.forEach(file => {
+            const rootPath = path.join(process.cwd(), file);
+            const corePath = path.join(process.cwd(), 'core', file);
+            if (!existsSync(rootPath)) {
+                // Copy file from core to root if it doesn't exist in the root
+                copyFileSync(corePath, rootPath);
+                console.log(`${file} copied to root directory.`);
+            }
+        });
     }
 
     initServer() {
         const server = http.createServer((req, res) => {
             if (req.url === '/') {
-                const chatHtml = readFileSync('./core/chat.html').toString();
-                const blankHtml = readFileSync('./core/blank.html').toString();
+                // Now serving from the root directory
+                const chatHtml = readFileSync('./chat.html').toString();
+                const mainHtml = readFileSync('./main.html').toString();
                 res.writeHead(200, { 'Content-Type': 'text/html' });
-                res.end(blankHtml + chatHtml);
+                res.end(mainHtml + chatHtml);
                 return;
             }
             res.writeHead(404);
