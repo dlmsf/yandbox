@@ -53,47 +53,55 @@ class File {
   }
 
   /**
-   * Implements content with precision into a file. This method simplifies insertion operations allowing for appending, prepending, and specific positioning.
-   * @param {string} path Path to the file.
-   * @param {string} contentToImplement Content to be implemented.
-   * @param {Object} [options={}] Insertion options. If not specified, content is appended.
-   * @param {'start' | 'end' | 'before' | 'after'} [options.position='end'] Position relative to the marker or file for the content.
-   * @param {string} [options.marker] Marker indicating where to implement the content. Required if position is 'before' or 'after'.
-   * @param {number} [options.index] Index at which to implement the content, overriding position if specified.
-   * @returns {Promise<void>} Resolves on successful content implementation.
-   */
-  static async Implement(path, contentToImplement, options = {}) {
-    try {
-      let content = await fs.readFile(path, 'utf8');
-      const { position = 'end', marker, index } = options;
+ * Implements content with precision into a file, designed for complex and extensive codebases.
+ * Offers several options for specifying the exact location for the content implementation,
+ * including support for multiple identical markers and proximity-based insertion.
+ * 
+ * @param {string} path Path to the file where content will be implemented.
+ * @param {string} contentToImplement The content to be inserted into the file.
+ * @param {Object} options Configuration options to define the precise insertion point and behavior.
+ * @param {'beforeMarker' | 'afterMarker' | 'atIndex'} [options.method='atIndex'] Specifies the method of insertion: before or after a marker, or at a specific index.
+ * @param {string} [options.marker] The marker relative to which content will be implemented (required for 'beforeMarker' and 'afterMarker' methods).
+ * @param {number} [options.index] The exact index at which to implement content (required for 'atIndex' method).
+ * @param {number} [options.instance=0] For files with multiple instances of the same marker, specifies which instance to target. The first instance is 0.
+ * @param {'start' | 'end'} [options.position='end'] For 'beforeMarker' and 'afterMarker' methods, specifies whether to insert at the start or end of the marker when multiple instances are found.
+ * @returns {Promise<void>} Resolves when the content has been successfully implemented.
+ */
+static async Implement(path, contentToImplement, options = {}) {
+  try {
+    let content = await fs.readFile(path, 'utf8');
+    const { method = 'atIndex', marker, index, instance = 0, position = 'end' } = options;
 
-      if (typeof index === 'number') {
-        content = content.slice(0, index) + contentToImplement + content.slice(index);
-      } else if (marker) {
-        const markerIndex = content.indexOf(marker);
-        if (markerIndex === -1) throw new Error('Marker not found.');
+    if (method === 'beforeMarker' || method === 'afterMarker') {
+      if (!marker) throw new Error('Marker is required for beforeMarker and afterMarker methods.');
 
-        switch (position) {
-          case 'before':
-            content = content.slice(0, markerIndex) + contentToImplement + content.slice(markerIndex);
-            break;
-          case 'after':
-            content = content.slice(0, markerIndex + marker.length) + contentToImplement + content.slice(markerIndex + marker.length);
-            break;
-          // No default needed as 'end' will be handled next
-        }
-      } else if (position === 'start') {
-        content = contentToImplement + content;
-      } else { // Default to append at 'end'
-        content += contentToImplement;
+      let parts = content.split(marker);
+      if (parts.length <= 1) throw new Error('Marker not found.');
+
+      // Adjusting parts array to target specific instance.
+      if (instance >= 0 && instance < parts.length - 1) {
+        let targetedPart = parts.splice(instance, 2).join(marker);
+        targetedPart = method === 'beforeMarker' ? contentToImplement + targetedPart : targetedPart + contentToImplement;
+        parts.splice(instance, 0, targetedPart);
+      } else {
+        throw new Error('Specified instance of marker not found.');
       }
 
-      await fs.writeFile(path, content);
-      console.log(`Content implemented in ${path}.`);
-    } catch (error) {
-      console.error(`Failed to implement content: ${error}`);
+      content = parts.join(marker);
+    } else if (method === 'atIndex') {
+      if (index === undefined || index < 0 || index > content.length) throw new Error('Invalid index.');
+      content = content.substring(0, index) + contentToImplement + content.substring(index);
+    } else {
+      throw new Error('Invalid method.');
     }
+
+    await fs.writeFile(path, content);
+    console.log(`Content implemented successfully in ${path}.`);
+  } catch (error) {
+    console.error(`Failed to implement content: ${error}`);
   }
+}
+
 }
 
 export default File;
