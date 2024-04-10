@@ -52,47 +52,57 @@ class File {
     }
   }
 
-  /**
- * Implements content with precision into a file, designed for complex and extensive codebases.
- * Offers several options for specifying the exact location for the content implementation,
- * including support for multiple identical markers and proximity-based insertion.
- * 
- * @param {string} path Path to the file where content will be implemented.
- * @param {string} contentToImplement The content to be inserted into the file.
- * @param {Object} options Configuration options to define the precise insertion point and behavior.
- * @param {'beforeMarker' | 'afterMarker' | 'atIndex'} [options.method='atIndex'] Specifies the method of insertion: before or after a marker, or at a specific index.
- * @param {string} [options.marker] The marker relative to which content will be implemented (required for 'beforeMarker' and 'afterMarker' methods).
- * @param {number} [options.index] The exact index at which to implement content (required for 'atIndex' method).
- * @param {number} [options.instance=0] For files with multiple instances of the same marker, specifies which instance to target. The first instance is 0.
- * @param {'start' | 'end'} [options.position='end'] For 'beforeMarker' and 'afterMarker' methods, specifies whether to insert at the start or end of the marker when multiple instances are found.
- * @returns {Promise<void>} Resolves when the content has been successfully implemented.
- */
-static async Implement(path, contentToImplement, options = {}) {
+ /**
+   * Implements content into a file with high precision, supporting advanced insertion strategies.
+   * This method accommodates complex scenarios, including inserting content between similar markers.
+   *
+   * @param {string} path - The path to the file where content will be implemented.
+   * @param {string} contentToImplement - The content to be inserted into the file.
+   * @param {Object} options - Configuration options for precise insertion.
+   * @param {'beforeMarker'|'afterMarker'|'atIndex'|'betweenMarkers'} [options.method='atIndex'] - The method of insertion:
+   *        'beforeMarker': Inserts content before the specified marker.
+   *        'afterMarker': Inserts content after the specified marker.
+   *        'atIndex': Inserts content at a specific character index in the file.
+   *        'betweenMarkers': Inserts content between two specified markers.
+   * @param {string} [options.marker] - The marker relative to which content will be implemented. Required for 'beforeMarker' and 'afterMarker'.
+   * @param {string} [options.startMarker] - The starting marker when using 'betweenMarkers' method. Defines the start of the insertion area.
+   * @param {string} [options.endMarker] - The ending marker when using 'betweenMarkers' method. Defines the end of the insertion area.
+   * @param {number} [options.index] - The exact character index at which to implement content. Required for 'atIndex'.
+   * @param {number} [options.instance=0] - For files with multiple instances of the same marker, specifies which instance to target.
+   * @param {'start'|'end'} [options.position='end'] - For 'beforeMarker' and 'afterMarker', specifies insertion at the start or end of the marker when multiple instances are found.
+   * @returns {Promise<void>} - A promise that resolves when the content has been successfully implemented.
+   */
+ static async Implement(path, contentToImplement, options = {}) {
   try {
     let content = await fs.readFile(path, 'utf8');
-    const { method = 'atIndex', marker, index, instance = 0, position = 'end' } = options;
 
-    if (method === 'beforeMarker' || method === 'afterMarker') {
-      if (!marker) throw new Error('Marker is required for beforeMarker and afterMarker methods.');
-
-      let parts = content.split(marker);
-      if (parts.length <= 1) throw new Error('Marker not found.');
-
-      // Adjusting parts array to target specific instance.
-      if (instance >= 0 && instance < parts.length - 1) {
-        let targetedPart = parts.splice(instance, 2).join(marker);
-        targetedPart = method === 'beforeMarker' ? contentToImplement + targetedPart : targetedPart + contentToImplement;
-        parts.splice(instance, 0, targetedPart);
-      } else {
-        throw new Error('Specified instance of marker not found.');
-      }
-
-      content = parts.join(marker);
-    } else if (method === 'atIndex') {
-      if (index === undefined || index < 0 || index > content.length) throw new Error('Invalid index.');
-      content = content.substring(0, index) + contentToImplement + content.substring(index);
-    } else {
-      throw new Error('Invalid method.');
+    switch (options.method) {
+      case 'beforeMarker':
+      case 'afterMarker':
+        if (!options.marker) throw new Error('Marker is required for beforeMarker and afterMarker methods.');
+        const parts = content.split(options.marker);
+        if (parts.length <= 1) throw new Error('Marker not found.');
+        if (options.method === 'beforeMarker') {
+          content = parts.join(options.marker + contentToImplement);
+        } else {
+          content = contentToImplement + parts.join(options.marker);
+        }
+        break;
+      case 'atIndex':
+        if (options.index === undefined || options.index < 0 || options.index > content.length) {
+          throw new Error('Invalid index.');
+        }
+        content = content.substring(0, options.index) + contentToImplement + content.substring(options.index);
+        break;
+      case 'betweenMarkers':
+        if (!options.startMarker || !options.endMarker) throw new Error('Start and end markers are required for betweenMarkers method.');
+        const startIndex = content.indexOf(options.startMarker);
+        const endIndex = content.indexOf(options.endMarker, startIndex + options.startMarker.length);
+        if (startIndex === -1 || endIndex === -1) throw new Error('Markers not found.');
+        content = content.substring(0, startIndex + options.startMarker.length) + contentToImplement + content.substring(endIndex);
+        break;
+      default:
+        throw new Error('Invalid method specified.');
     }
 
     await fs.writeFile(path, content);
