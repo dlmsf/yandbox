@@ -1,15 +1,15 @@
 import { promises as fs } from 'fs';
 
 /**
- * Provides advanced utilities for creating, editing, and accurately implementing content in files,
- * designed to handle complex scenarios with high precision.
+ * Advanced file manipulation utilities designed for creating, editing,
+ * and precisely implementing content with flexibility and ease of use.
  */
 class File {
   /**
-   * Creates or overwrites a file with the specified content.
-   * @param {string} path - Path to the file.
-   * @param {string} [content=''] - Content to write to the file. Defaults to an empty file.
-   * @returns {Promise<void>} - Resolves on successful file creation.
+   * Creates or overwrites a file with the specified content. Defaults to an empty file if content is not provided.
+   * @param {string} path Path to the file.
+   * @param {string} [content=''] Content to write to the file.
+   * @returns {Promise<void>} Resolves on successful file creation.
    */
   static async Create(path, content = '') {
     try {
@@ -22,9 +22,9 @@ class File {
 
   /**
    * Edits a file with high precision, allowing for targeted replacements in files with multiple identical parts.
-   * @param {string} path - Path to the file.
-   * @param {Array<{searchValue: string | RegExp, newValue: string, instance?: number}>} edits - Edits to perform, with optional instance to target specific occurrences.
-   * @returns {Promise<void>} - Resolves on successful file edit.
+   * @param {string} path Path to the file.
+   * @param {Array<{searchValue: string | RegExp, newValue: string, instance?: number}>} edits Edits to perform, with optional instance to target specific occurrences.
+   * @returns {Promise<void>} Resolves on successful file edit.
    */
   static async Edit(path, edits) {
     try {
@@ -32,25 +32,16 @@ class File {
       
       edits.forEach(({ searchValue, newValue, instance }) => {
         if (typeof instance === 'number') {
-          const parts = content.split(searchValue);
-          let occurrenceCount = 0;
-          content = parts.reduce((acc, currentPart, index) => {
-            if (index < parts.length - 1) { // Avoid adding the searchValue after the last part
-              if (occurrenceCount === instance) {
-                acc += newValue + currentPart;
-              } else {
-                acc += searchValue + currentPart;
-              }
-              occurrenceCount++;
-            } else {
-              acc += currentPart; // Add the last part without appending searchValue
-            }
-            return acc;
-          }, '');
-        } else if (searchValue instanceof RegExp) {
-          content = content.replace(searchValue, newValue);
+          const matches = content.match(new RegExp(searchValue, 'g')) || [];
+          if (matches.length >= instance + 1) {
+            let i = 0;
+            content = content.replace(new RegExp(searchValue, 'g'), (match) => {
+              i++;
+              return i - 1 === instance ? newValue : match;
+            });
+          }
         } else {
-          content = content.split(searchValue).join(newValue); // Replace all occurrences if instance is not specified
+          content = content.replace(new RegExp(searchValue, 'g'), newValue);
         }
       });
 
@@ -62,30 +53,42 @@ class File {
   }
 
   /**
-   * Implements content with precision into a file, supporting complex conditions for insertion.
-   * @param {string} path - Path to the file.
-   * @param {string} contentToImplement - Content to be implemented.
-   * @param {Object} options - Insertion options, supporting markers or indices, and specifying whether before or after the marker/index.
-   * @returns {Promise<void>} - Resolves on successful content implementation.
+   * Implements content with precision into a file. This method simplifies insertion operations allowing for appending, prepending, and specific positioning.
+   * @param {string} path Path to the file.
+   * @param {string} contentToImplement Content to be implemented.
+   * @param {Object} [options={}] Insertion options. If not specified, content is appended.
+   * @param {'start' | 'end' | 'before' | 'after'} [options.position='end'] Position relative to the marker or file for the content.
+   * @param {string} [options.marker] Marker indicating where to implement the content. Required if position is 'before' or 'after'.
+   * @param {number} [options.index] Index at which to implement the content, overriding position if specified.
+   * @returns {Promise<void>} Resolves on successful content implementation.
    */
-  static async Implement(path, contentToImplement, options) {
+  static async Implement(path, contentToImplement, options = {}) {
     try {
-      let fileContent = await fs.readFile(path, 'utf8');
-      if ('marker' in options && options.marker) {
-        const segments = fileContent.split(options.marker);
-        if (segments.length > 1) { // Marker found at least once
-          const markerIndex = options.instance && options.instance > 0 && options.instance < segments.length ? options.instance : 0;
-          fileContent = segments.slice(0, markerIndex + 1).join(options.marker) + contentToImplement + segments.slice(markerIndex + 1).join(options.marker);
-        } else {
-          throw new Error('Marker not found.');
+      let content = await fs.readFile(path, 'utf8');
+      const { position = 'end', marker, index } = options;
+
+      if (typeof index === 'number') {
+        content = content.slice(0, index) + contentToImplement + content.slice(index);
+      } else if (marker) {
+        const markerIndex = content.indexOf(marker);
+        if (markerIndex === -1) throw new Error('Marker not found.');
+
+        switch (position) {
+          case 'before':
+            content = content.slice(0, markerIndex) + contentToImplement + content.slice(markerIndex);
+            break;
+          case 'after':
+            content = content.slice(0, markerIndex + marker.length) + contentToImplement + content.slice(markerIndex + marker.length);
+            break;
+          // No default needed as 'end' will be handled next
         }
-      } else if ('index' in options && typeof options.index === 'number') {
-        fileContent = fileContent.substring(0, options.index) + contentToImplement + fileContent.substring(options.index);
-      } else {
-        throw new Error('Invalid options for implementing content.');
+      } else if (position === 'start') {
+        content = contentToImplement + content;
+      } else { // Default to append at 'end'
+        content += contentToImplement;
       }
 
-      await fs.writeFile(path, fileContent);
+      await fs.writeFile(path, content);
       console.log(`Content implemented in ${path}.`);
     } catch (error) {
       console.error(`Failed to implement content: ${error}`);
