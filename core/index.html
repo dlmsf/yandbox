@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <script>
+        function initializeChat() {
+    const chatIcon = document.getElementById('chat-icon');
+    const closeIcon = document.getElementById('close-icon');
+    const chatBox = document.getElementById('chat-box');
+    const chatInput = document.getElementById('chat-input');
+    const sendButton = document.getElementById('send-button');
+    const chatContent = document.getElementById('chat-content');
+
+    const ws = new WebSocket('ws://localhost:3000');
+
+    // Use this to save chat history periodically or upon certain events
+    function saveChatState() {
+        const chatHistory = document.getElementById('chat-content').innerHTML;
+        localStorage.setItem('chatHistory', chatHistory);
+    }
+
+    // Use this to load chat history when the page is loaded
+    function loadChatState() {
+        const savedHistory = localStorage.getItem('chatHistory');
+        if (savedHistory) {
+            document.getElementById('chat-content').innerHTML = savedHistory;
+        }
+    }
+
+    window.addEventListener('beforeunload', saveChatState);
+    document.addEventListener('DOMContentLoaded', loadChatState);
+
+    // Variable to keep track of whether a response is being processed
+    let responseBeingProcessed = false;
+
+    ws.onopen = () => {
+        console.log('WebSocket connection established');
+    };
+
+    ws.onmessage = (event) => {
+    if (event.data === "END_OF_RESPONSE") {
+        // Re-enable input field and send button after receiving the end signal
+        chatInput.disabled = false;
+        sendButton.disabled = false;
+        responseBeingProcessed = false; // Reset flag
+        return; // Don't process this message any further
+    }
+
+    let parsed = JSON.parse(event.data)
+
+    if(parsed.type == 'token') {
+
+    if (!aiMessageContainer) {
+        aiMessageContainer = document.createElement('div');
+        aiMessageContainer.classList.add('chat-message');
+        aiMessageContainer.textContent = 'AI:'; // Initialize AI label
+        chatContent.appendChild(aiMessageContainer);
+    }
+
+    // Directly concatenate received token to the AI message container without adding space
+    aiMessageContainer.textContent += parsed.token; // Direct concatenation here
+    chatContent.scrollTop = chatContent.scrollHeight;
+
+    }
+};
+
+
+    chatIcon.addEventListener('click', () => {
+        chatBox.style.display = 'flex';
+        chatIcon.style.display = 'none';
+        closeIcon.style.display = 'block';
+    });
+
+    closeIcon.addEventListener('click', () => {
+        chatBox.style.display = 'none';
+        chatIcon.style.display = 'flex';
+    });
+
+    let aiMessageContainer = null; // Initialize outside to be accessible in sendMessage and ws.onmessage
+
+    const sendMessage = () => {
+        const message = chatInput.value.trim();
+        if (message && !responseBeingProcessed) {
+            // Disable input field and send button only if a response is not being processed
+            chatInput.disabled = true;
+            sendButton.disabled = true;
+
+            ws.send(message);
+            displayMessage(`You: ${message}`, 'user');
+            chatInput.value = '';
+            aiMessageContainer = null; // Ensure a new container for AI messages starts with each new user message
+
+            // Set responseBeingProcessed to true
+            responseBeingProcessed = true;
+        }
+    };
+
+    sendButton.addEventListener('click', sendMessage);
+
+    chatInput.addEventListener('keypress', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            sendMessage();
+        }
+    });
+
+    function displayMessage(message, sender) {
+        const messageDiv = document.createElement('div');
+        messageDiv.classList.add('chat-message');
+        messageDiv.textContent = message;
+        chatContent.appendChild(messageDiv);
+        chatContent.scrollTop = chatContent.scrollHeight;
+    }
+
+
+}
+    </script>
+    <meta charset="UTF-8">
+    <title>Chat and Main</title>
+    <style>
+        /* Additional styling can be added here */
+    </style>
+</head>
+<body>
+    <div id="main-content">
+        <!-- Main content will be dynamically loaded and updated here -->
+    </div>
+    <div id="chat-container">
+        <!-- Chat will be loaded once and remain static -->
+    </div>
+
+    <script>
+        // WebSocket connection to handle dynamic updates
+        const ws = new WebSocket('ws://localhost:3000');
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            if (data.type === 'update-html') {
+                document.getElementById('main-content').innerHTML = data.html;
+            }
+        };
+
+        // Initial load of chat.html and main.html
+        document.addEventListener('DOMContentLoaded', function() {
+            fetch('chat.html')
+                .then(response => response.text())
+                .then(html => {
+                    const chatContainer = document.getElementById('chat-container');
+                    chatContainer.innerHTML = html;
+                    initializeChat()
+                });
+            fetch('main.html')
+                .then(response => response.text())
+                .then(html => {
+                    document.getElementById('main-content').innerHTML = html;
+                });
+        });
+    </script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 import http from 'http';
 import { WebSocketServer } from 'ws';
-import { readFileSync, existsSync, copyFileSync } from 'fs';
+import { readFileSync, existsSync, copyFileSync,watch } from 'fs';
 import path from 'path';
 
 function Sleep(ms) {
@@ -29,7 +29,7 @@ class Brain {
     }
 
     ensureBaseFiles() {
-        const files = ['chat.html', 'main.html'];
+        const files = ['chat.html', 'main.html','index.html'];
         files.forEach(file => {
             const rootPath = path.join(process.cwd(), file);
             const corePath = path.join(process.cwd(), 'core', file);
@@ -44,15 +44,23 @@ class Brain {
     initServer() {
         const server = http.createServer((req, res) => {
             if (req.url === '/') {
-                // Now serving from the root directory
-                const chatHtml = readFileSync('./chat.html').toString();
-                const mainHtml = readFileSync('./main.html').toString();
+                // Serve the combined index.html
+                const indexHtml = readFileSync('./index.html').toString();
                 res.writeHead(200, { 'Content-Type': 'text/html' });
-                res.end(mainHtml + chatHtml);
+                res.end(indexHtml);
                 return;
+            } else {
+                // Serve other files or handle 404
+                const filePath = path.join(process.cwd(), req.url);
+                if (existsSync(filePath)) {
+                    const fileContent = readFileSync(filePath).toString();
+                    res.writeHead(200, { 'Content-Type': 'text/html' });
+                    res.end(fileContent);
+                } else {
+                    res.writeHead(404);
+                    res.end('Not found');
+                }
             }
-            res.writeHead(404);
-            res.end();
         });
 
         const wss = new WebSocketServer({ server });
@@ -60,14 +68,27 @@ class Brain {
         wss.on('connection', ws => {
             ws.on('message', async message => {
                 await this.processInputFunction(message, async (responseToken) => {
-                    ws.send(responseToken); // Send each token back to the client
+                    ws.send(JSON.stringify({type : 'token', token : responseToken})); // Send each token back to the client
                 });
                 ws.send("END_OF_RESPONSE"); // Signal the end of response processing
             });
         });
 
+        watch('./main.html', (eventType, filename) => {
+            if (eventType === 'change') {
+                const updatedHtml = readFileSync('./main.html', 'utf8');
+                wss.clients.forEach(client => {
+                    client.send(JSON.stringify({ type: 'update-html', html: updatedHtml }));
+                });
+            }
+        });
+
+
         server.listen(3000, () => console.log(`Server and WebSocket listening on port 3000`));
+    
+    
     }
+
 }
 
 export default Brain;
