@@ -78,16 +78,14 @@ class File {
 
     switch (options.method) {
       case 'beforeMarker':
-      case 'afterMarker':
-        if (!options.marker) throw new Error('Marker is required for beforeMarker and afterMarker methods.');
-        const parts = content.split(options.marker);
-        if (parts.length <= 1) throw new Error('Marker not found.');
-        if (options.method === 'beforeMarker') {
-          content = parts.join(options.marker + contentToImplement);
-        } else {
-          content = contentToImplement + parts.join(options.marker);
-        }
-        break;
+        case 'afterMarker':
+          if (!options.marker) throw new Error('Marker is required for beforeMarker and afterMarker methods.');
+          const parts = content.split(options.marker);
+          if (parts.length <= 1) throw new Error('Marker not found.');
+          // Append content right after the first occurrence of the marker
+          parts[0] = parts[0] + options.marker + contentToImplement;
+          content = parts.join(options.marker);
+          break;
       case 'atIndex':
         if (options.index === undefined || options.index < 0 || options.index > content.length) {
           throw new Error('Invalid index.');
