@@ -3,9 +3,27 @@ import { WebSocketServer } from 'ws';
 import { readFileSync, existsSync, copyFileSync } from 'fs';
 import path from 'path';
 
+function Sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+function tokenize(text) {
+    return text.trim().match(/(?:^|\s+)(\S+)/g);
+  }
+
+let default_function = async (input,display) => {
+
+    let frase = [' Você',' Digitou ',...tokenize(input.toString())]
+  
+    for(const w of frase){
+      await display(w)
+      await Sleep(20)
+    }
+}
+
 class Brain {
-    constructor(processInputFunction) {
-        this.processInputFunction = processInputFunction;
+    constructor(config = {inputFunction : undefined}) {
+        this.processInputFunction = config.inputFunction || default_function
         this.ensureBaseFiles();
         this.initServer();
     }
