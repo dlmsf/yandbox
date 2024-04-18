@@ -2,131 +2,34 @@
 <html lang="en">
 <head>
     <script>
-        function initializeChat() {
-    const chatIcon = document.getElementById('chat-icon');
-    const closeIcon = document.getElementById('close-icon');
-    const chatBox = document.getElementById('chat-box');
-    const chatInput = document.getElementById('chat-input');
-    const sendButton = document.getElementById('send-button');
-    const chatContent = document.getElementById('chat-content');
-
-    const ws = new WebSocket('ws://localhost:3000');
-
-    // Use this to save chat history periodically or upon certain events
-    function saveChatState() {
-        const chatHistory = document.getElementById('chat-content').innerHTML;
-        localStorage.setItem('chatHistory', chatHistory);
-    }
-
-    // Use this to load chat history when the page is loaded
-    function loadChatState() {
-        const savedHistory = localStorage.getItem('chatHistory');
-        if (savedHistory) {
-            document.getElementById('chat-content').innerHTML = savedHistory;
-        }
-    }
-
-    window.addEventListener('beforeunload', saveChatState);
-    document.addEventListener('DOMContentLoaded', loadChatState);
-
-    // Variable to keep track of whether a response is being processed
-    let responseBeingProcessed = false;
-
-    ws.onopen = () => {
-        console.log('WebSocket connection established');
-    };
-
-    ws.onmessage = (event) => {
-    if (event.data === "END_OF_RESPONSE") {
-        // Re-enable input field and send button after receiving the end signal
-        chatInput.disabled = false;
-        sendButton.disabled = false;
-        responseBeingProcessed = false; // Reset flag
-        return; // Don't process this message any further
-    }
-
-    let parsed = JSON.parse(event.data)
-
-    if(parsed.type == 'token') {
-
-    if (!aiMessageContainer) {
-        aiMessageContainer = document.createElement('div');
-        aiMessageContainer.classList.add('chat-message');
-        aiMessageContainer.textContent = 'AI:'; // Initialize AI label
-        chatContent.appendChild(aiMessageContainer);
-    }
-
-    // Directly concatenate received token to the AI message container without adding space
-    aiMessageContainer.textContent += parsed.token; // Direct concatenation here
-    chatContent.scrollTop = chatContent.scrollHeight;
-
-    }
-};
-
-
-    chatIcon.addEventListener('click', () => {
-        chatBox.style.display = 'flex';
-        chatIcon.style.display = 'none';
-        closeIcon.style.display = 'block';
-    });
-
-    closeIcon.addEventListener('click', () => {
-        chatBox.style.display = 'none';
-        chatIcon.style.display = 'flex';
-    });
-
-    let aiMessageContainer = null; // Initialize outside to be accessible in sendMessage and ws.onmessage
-
-    const sendMessage = () => {
-        const message = chatInput.value.trim();
-        if (message && !responseBeingProcessed) {
-            // Disable input field and send button only if a response is not being processed
-            chatInput.disabled = true;
-            sendButton.disabled = true;
-
-            ws.send(message);
-            displayMessage(`You: ${message}`, 'user');
-            chatInput.value = '';
-            aiMessageContainer = null; // Ensure a new container for AI messages starts with each new user message
-
-            // Set responseBeingProcessed to true
-            responseBeingProcessed = true;
-        }
-    };
-
-    sendButton.addEventListener('click', sendMessage);
-
-    chatInput.addEventListener('keypress', (event) => {
-        if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
-            sendMessage();
-        }
-    });
-
-    function displayMessage(message, sender) {
-        const messageDiv = document.createElement('div');
-        messageDiv.classList.add('chat-message');
-        messageDiv.textContent = message;
-        chatContent.appendChild(messageDiv);
-        chatContent.scrollTop = chatContent.scrollHeight;
-    }
-
-
-}
+        
     </script>
     <meta charset="UTF-8">
     <title>Blank Page</title>
     <style>
-        /* Additional styling can be added here */
+      body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden; /* Prevents scrollbars */
+        }
+        iframe {
+            border: 0; /* No border */
+            position: fixed;
+            bottom: 0; /* Positioned at the bottom */
+            right: 0; /* Positioned on the right */
+            width: 500px; /* Set to the width of the chat UI */
+            height: 500px; /* Set to the height of the chat UI */
+            background: transparent !important; /* Ensures no background color */
+            z-index: 1000; /* High z-index to ensure it's above other content */
+        }
     </style>
 </head>
 <body>
     <div id="main-content">
         <!-- Main content will be dynamically loaded and updated here -->
     </div>
-    <div id="chat-container">
-        <!-- Chat will be loaded once and remain static -->
-    </div>
+    <iframe id="chat-frame" src="chat.html" frameborder="0" allowtransparency="true"></iframe>
 
     <script>
         // WebSocket connection to handle dynamic updates
@@ -134,12 +37,42 @@
         ws.onmessage = function(event) {
             const data = JSON.parse(event.data);
             if (data.type === 'update-html') {
-                document.getElementById('main-content').innerHTML = data.html;
+                const mainContent = document.getElementById('main-content');
+                mainContent.innerHTML = ''; // Clear existing content
+                insertAndExecuteScripts(mainContent, data.html);
             }
         };
 
+        function insertAndExecuteScripts(container, htmlString) {
+    // Temporary container for the incoming HTML
+    const tempContainer = document.createElement('div');
+    tempContainer.innerHTML = htmlString;
+
+    // Move non-script elements to the real container
+    Array.from(tempContainer.childNodes).forEach(node => {
+        if (node.nodeType === Node.ELEMENT_NODE && node.tagName !== 'SCRIPT') {
+            container.appendChild(node.cloneNode(true));
+        }
+    });
+
+    // Handle and execute scripts
+    const scripts = tempContainer.querySelectorAll('script');
+    scripts.forEach(script => {
+        const newScript = document.createElement('script');
+        if (script.src) {
+            newScript.src = script.src;
+            newScript.onload = () => console.log('Loaded external script:', script.src);
+            newScript.onerror = () => console.log('Error loading script:', script.src);
+        } else {
+            newScript.textContent = script.textContent;
+        }
+        document.body.appendChild(newScript).parentNode.removeChild(newScript);
+    });
+}
+
         // Initial load of chat.html and main.html
         document.addEventListener('DOMContentLoaded', function() {
+            /*
             fetch('chat.html')
                 .then(response => response.text())
                 .then(html => {
@@ -147,6 +80,7 @@
                     chatContainer.innerHTML = html;
                     initializeChat()
                 });
+                */
             fetch('main.html')
                 .then(response => response.text())
                 .then(html => {
