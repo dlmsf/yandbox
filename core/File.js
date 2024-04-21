@@ -46,15 +46,15 @@ class File {
     }
   }
 
-  /**
- * Implements content into a file with unparalleled precision and flexibility.
- * This method supports sophisticated insertion strategies that cater to complex requirements,
- * including handling nested or overlapping markers, and ensuring the exact position for content placement.
+ /**
+ * Implements content into a file with exceptional precision, flexibility, and control.
+ * Supports a wide range of sophisticated insertion strategies and conditions, ensuring precise adjustments
+ * in content placement based on configurable, complex logic that can handle multiple scenarios and combinations.
  *
  * @param {string} path - The path to the file where content will be implemented.
  * @param {string} contentToImplement - The content to be inserted.
  * @param {Object} options - Configuration options for precise insertion.
- * @param {'beforeMarker'|'afterMarker'|'atIndex'|'betweenMarkers'} [options.method='atIndex'] - The method of insertion.
+ * @param {'beforeMarker'|'afterMarker'|'atIndex'|'betweenMarkers'|'custom'} [options.method='atIndex'] - The method of insertion.
  * @param {string} [options.marker] - The marker for 'beforeMarker' and 'afterMarker' methods.
  * @param {string} [options.startMarker] - The start marker for 'betweenMarkers' method.
  * @param {string} [options.endMarker] - The end marker for 'betweenMarkers' method.
@@ -62,11 +62,22 @@ class File {
  * @param {number} [options.instance=0] - Specifies which instance of the marker to target for multiple occurrences.
  * @param {'start'|'end'} [options.position='end'] - Specifies position relative to the marker, used with 'beforeMarker' and 'afterMarker'.
  * @param {boolean} [options.globalMatch=false] - When set to true, marker occurrences are counted globally across the file; otherwise, locally within sections.
+ * @param {Function} [options.condition] - A function that returns a boolean to decide whether the insertion should proceed based on the current content state.
+ * @param {Function} [options.transform] - A function to transform contentToImplement based on current content before insertion.
  * @returns {Promise<void>} - Resolves when content has been successfully implemented or rejects with an error.
  */
 static async Implement(path, contentToImplement, options = {}) {
   try {
     let content = await fs.readFile(path, 'utf8');
+
+    if (options.condition && !options.condition(content)) {
+      throw new Error('Condition for insertion not met.');
+    }
+
+    if (options.transform) {
+      contentToImplement = options.transform(content, contentToImplement);
+    }
+
     let index = 0;
 
     switch (options.method) {
@@ -80,9 +91,6 @@ static async Implement(path, contentToImplement, options = {}) {
 
         let targetMatch = matches[options.instance || 0];
         index = targetMatch.index + (options.method === 'afterMarker' ? targetMatch[0].length : 0);
-        if (options.globalMatch && contentToImplement.includes(options.marker)) {
-          throw new Error('Content to implement cannot contain the marker when globalMatch is enabled.');
-        }
         content = content.slice(0, index) + contentToImplement + content.slice(index);
         break;
 
@@ -102,6 +110,13 @@ static async Implement(path, contentToImplement, options = {}) {
         content = content.slice(0, start + options.startMarker.length) + contentToImplement + content.slice(end);
         break;
 
+      case 'custom':
+        if (!options.customInsert) {
+          throw new Error('Custom insertion function must be defined for custom method.');
+        }
+        content = options.customInsert(content, contentToImplement);
+        break;
+
       default:
         throw new Error('Invalid method specified.');
     }
@@ -112,6 +127,7 @@ static async Implement(path, contentToImplement, options = {}) {
     console.error(`Failed to implement content: ${error}`);
   }
 }
+
 
 }
 
