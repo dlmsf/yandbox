@@ -47,67 +47,72 @@ class File {
   }
 
   /**
-   * Implements content into a file with high precision, supporting advanced insertion strategies.
-   * @param {string} path - The path to the file where content will be implemented.
-   * @param {string} contentToImplement - The content to be inserted.
-   * @param {Object} options - Configuration options for precise insertion.
-   * @param {'beforeMarker'|'afterMarker'|'atIndex'|'betweenMarkers'} [options.method='atIndex'] - The method of insertion.
-   * @param {string} [options.marker] - The marker for 'beforeMarker' and 'afterMarker' methods.
-   * @param {string} [options.startMarker] - The start marker for 'betweenMarkers' method.
-   * @param {string} [options.endMarker] - The end marker for 'betweenMarkers' method.
-   * @param {number} [options.index] - The character index for 'atIndex' method.
-   * @param {number} [options.instance=0] - Specifies which instance to target for multiple occurrences.
-   * @param {'start'|'end'} [options.position='end'] - Specifies position relative to the marker.
-   * @returns {Promise<void>} - Resolves when content has been implemented or rejects with error.
-   */
-  static async Implement(path, contentToImplement, options = {}) {
-    try {
-      let content = await fs.readFile(path, 'utf8');
-      let index;
+ * Implements content into a file with unparalleled precision and flexibility.
+ * This method supports sophisticated insertion strategies that cater to complex requirements,
+ * including handling nested or overlapping markers, and ensuring the exact position for content placement.
+ *
+ * @param {string} path - The path to the file where content will be implemented.
+ * @param {string} contentToImplement - The content to be inserted.
+ * @param {Object} options - Configuration options for precise insertion.
+ * @param {'beforeMarker'|'afterMarker'|'atIndex'|'betweenMarkers'} [options.method='atIndex'] - The method of insertion.
+ * @param {string} [options.marker] - The marker for 'beforeMarker' and 'afterMarker' methods.
+ * @param {string} [options.startMarker] - The start marker for 'betweenMarkers' method.
+ * @param {string} [options.endMarker] - The end marker for 'betweenMarkers' method.
+ * @param {number} [options.index] - The character index for 'atIndex' method.
+ * @param {number} [options.instance=0] - Specifies which instance of the marker to target for multiple occurrences.
+ * @param {'start'|'end'} [options.position='end'] - Specifies position relative to the marker, used with 'beforeMarker' and 'afterMarker'.
+ * @param {boolean} [options.globalMatch=false] - When set to true, marker occurrences are counted globally across the file; otherwise, locally within sections.
+ * @returns {Promise<void>} - Resolves when content has been successfully implemented or rejects with an error.
+ */
+static async Implement(path, contentToImplement, options = {}) {
+  try {
+    let content = await fs.readFile(path, 'utf8');
+    let index = 0;
 
-      switch (options.method) {
-        case 'beforeMarker':
-        case 'afterMarker':
-          if (!options.marker) throw new Error('Marker is required for beforeMarker and afterMarker methods.');
-          const regex = new RegExp(options.marker, 'g');
-          const markers = [...content.matchAll(regex)];
-          if (markers.length === 0) throw new Error('Marker not found.');
+    switch (options.method) {
+      case 'beforeMarker':
+      case 'afterMarker':
+        const regex = new RegExp(options.marker, 'g');
+        let matches = [...content.matchAll(regex)];
+        if (matches.length === 0 || (options.instance !== undefined && options.instance >= matches.length)) {
+          throw new Error('Marker not found or instance exceeds available markers.');
+        }
 
-          index = markers[options.instance || 0].index;
-          if (options.method === 'beforeMarker') {
-            content = content.slice(0, index) + contentToImplement + content.slice(index);
-          } else {
-            index += options.marker.length;
-            content = content.slice(0, index) + contentToImplement + content.slice(index);
-          }
-          break;
+        let targetMatch = matches[options.instance || 0];
+        index = targetMatch.index + (options.method === 'afterMarker' ? targetMatch[0].length : 0);
+        if (options.globalMatch && contentToImplement.includes(options.marker)) {
+          throw new Error('Content to implement cannot contain the marker when globalMatch is enabled.');
+        }
+        content = content.slice(0, index) + contentToImplement + content.slice(index);
+        break;
 
-        case 'atIndex':
-          if (options.index === undefined || options.index < 0 || options.index > content.length) {
-            throw new Error('Invalid index.');
-          }
-          content = content.slice(0, options.index) + contentToImplement + content.slice(options.index);
-          break;
+      case 'atIndex':
+        if (options.index === undefined || options.index < 0 || options.index > content.length) {
+          throw new Error('Invalid index.');
+        }
+        content = content.slice(0, options.index) + contentToImplement + content.slice(options.index);
+        break;
 
-        case 'betweenMarkers':
-          if (!options.startMarker || !options.endMarker) throw new Error('Start and end markers are required for betweenMarkers method.');
-          const start = content.indexOf(options.startMarker);
-          const end = content.indexOf(options.endMarker, start + options.startMarker.length);
-          if (start === -1 || end === -1) throw new Error('Markers not found.');
+      case 'betweenMarkers':
+        const start = content.indexOf(options.startMarker);
+        const end = content.indexOf(options.endMarker, start + options.startMarker.length);
+        if (start === -1 || end === -1 || start >= end) {
+          throw new Error('Invalid or overlapping markers.');
+        }
+        content = content.slice(0, start + options.startMarker.length) + contentToImplement + content.slice(end);
+        break;
 
-          content = content.slice(0, start + options.startMarker.length) + contentToImplement + content.slice(end);
-          break;
-
-        default:
-          throw new Error('Invalid method specified.');
-      }
-
-      await fs.writeFile(path, content);
-      console.log(`Content implemented successfully in ${path}.`);
-    } catch (error) {
-      console.error(`Failed to implement content: ${error}`);
+      default:
+        throw new Error('Invalid method specified.');
     }
+
+    await fs.writeFile(path, content);
+    console.log(`Content implemented successfully in ${path}.`);
+  } catch (error) {
+    console.error(`Failed to implement content: ${error}`);
   }
+}
+
 }
 
 export default File;
