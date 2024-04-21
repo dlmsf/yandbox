@@ -128,7 +128,6 @@ static async Implement(path, contentToImplement, options = {}) {
   }
 }
 
-
 }
 
 export default File;
