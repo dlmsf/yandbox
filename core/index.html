@@ -33,15 +33,19 @@
 
     <script>
         // WebSocket connection to handle dynamic updates
-        const ws = new WebSocket('ws://localhost:3000');
+        const ws = new WebSocket('ws://localhost:3001');
         ws.onmessage = function(event) {
-            const data = JSON.parse(event.data);
-            if (data.type === 'update-html') {
-                const mainContent = document.getElementById('main-content');
-                mainContent.innerHTML = ''; // Clear existing content
-                insertAndExecuteScripts(mainContent, data.html);
-            }
-        };
+    try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'update-html') {
+            const mainContent = document.getElementById('main-content');
+            mainContent.innerHTML = ''; // Clear existing content
+            insertAndExecuteScripts(mainContent, data.html);
+        }
+    } catch (e) {
+        console.error(`Failed to parse incoming message: ${e.message}`);
+    }
+};
 
         function insertAndExecuteScripts(container, htmlString) {
     // Temporary container for the incoming HTML

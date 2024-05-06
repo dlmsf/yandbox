@@ -1,5 +1,5 @@
 import http from 'http';
-import { WebSocketServer } from 'ws';
+import WebSocket from './core/WebSocket.js';
 import { readFileSync, existsSync, copyFileSync,watch } from 'fs';
 import path from 'path';
 
@@ -63,23 +63,23 @@ class Brain {
             }
         });
 
-        const wss = new WebSocketServer({ server });
+        const ws = new WebSocket(3001)
 
-        wss.on('connection', ws => {
-            ws.on('message', async message => {
+        
+            ws.on('message', async (socket,message) => {
                 await this.processInputFunction(message, async (responseToken) => {
-                    ws.send(JSON.stringify({type : 'token', token : responseToken})); // Send each token back to the client
+                    ws.send(socket,JSON.stringify({type : 'token', token : responseToken})); // Send each token back to the client
                 });
-                ws.send("END_OF_RESPONSE"); // Signal the end of response processing
+                ws.send(socket,"END_OF_RESPONSE"); // Signal the end of response processing
             });
-        });
+       
 
         watch('./main.html', (eventType, filename) => {
             if (eventType === 'change') {
                 const updatedHtml = readFileSync('./main.html', 'utf8');
-                wss.clients.forEach(client => {
-                    client.send(JSON.stringify({ type: 'update-html', html: updatedHtml }));
-                });
+               
+                    ws.broadcast(JSON.stringify({ type: 'update-html', html: updatedHtml }));
+               
             }
         });
 
