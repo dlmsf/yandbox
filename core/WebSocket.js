@@ -81,7 +81,7 @@ class WebSocket {
         let offset = 2;
         let payloadLength = buffer[1] & 0x7F;
     
-        if (![0x0, 0x1].includes(opcode)) {
+        if (![0x0, 0x1, 0x2, 0x8, 0x9, 0xA].includes(opcode)) {
             console.error(`Invalid opcode: ${opcode}`);
             socket.destroy();
             return;
@@ -118,8 +118,15 @@ class WebSocket {
     
         if (opcode === 0x1) {
             this.trigger('message', socket, message.toString('utf8'));
+        } else if (opcode === 0x2) {
+            this.trigger('message', socket, message); // Binary data
+        } else if (opcode === 0x8) {
+            socket.end();
+        } else if (opcode === 0x9) {
+            this.send(socket, ''); // Pong
         }
     }
+    
     
     
     broadcast(message, specificSocket = null) {
