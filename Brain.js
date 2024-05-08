@@ -2,28 +2,29 @@ import http from 'http';
 import WebSocket from './core/WebSocket.js';
 import { readFileSync, existsSync, copyFileSync,watch } from 'fs';
 import path from 'path';
-
-function Sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-function tokenize(text) {
-    return text.trim().match(/(?:^|\s+)(\S+)/g);
-  }
-
-let default_function = async (input,display) => {
-
-    let frase = [' Você',' Digitou ',...tokenize(input.toString())]
-  
-    for(const w of frase){
-      await display(w)
-      await Sleep(20)
-    }
-}
+import EasyAI from '@massudy/easyai';
+import Chat from '@massudy/easyai/core/ChatModule/Chat.js';
+import ChatPrompt from '@massudy/easyai/core/MenuCLI/Sandbox/ChatPrompt.js';
 
 class Brain {
-    constructor(config = {inputFunction : undefined}) {
-        this.processInputFunction = config.inputFunction || default_function
+    constructor(config = {}) {
+        
+        this.Chat = new Chat()
+
+        this.port = config.port || 3000;
+        this.easyai_url = config.easyai_url || ((config.openai_token) ? undefined : 'localhost')
+        this.easyai_port = config.easyai_port || (this.easyai_url == 'localhost') ? 4000 : undefined
+        this.AI = new EasyAI({server_url : this.easyai_url,server_port : this.easyai_port,openai_token : config.openai_token,openai_model : config.openai_model})
+        this.processInputFunction = async (input,displayToken) => {
+            this.Chat.NewMessage('User: ',input)
+            let historical_prompt = ''
+            this.Chat.Historical.forEach(e => {
+             historical_prompt = `${historical_prompt}${e.Sender}${e.Content} | `
+            })
+            let result = await this.AI.Generate(`${ChatPrompt}${historical_prompt}AI:`,{tokenCallback : async (token) => {await displayToken(token.stream.content)},stop : ['|']})
+            this.Chat.NewMessage('AI: ',result.full_text)
+        }
+        
         this.ensureBaseFiles();
         this.initServer();
     }
@@ -63,7 +64,7 @@ class Brain {
             }
         });
 
-        const ws = new WebSocket(3001)
+        const ws = new WebSocket(this.port+1)
 
         
             ws.on('message', async (socket,message) => {
@@ -84,7 +85,7 @@ class Brain {
         });
 
 
-        server.listen(3000, () => console.log(`Server and WebSocket listening on port 3000`));
+        server.listen(this.port,() => console.log(`Server and WebSocket listening on port 3000`));
     
     
     }
