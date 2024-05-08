@@ -6,6 +6,17 @@ import EasyAI from '@massudy/easyai';
 import Chat from '@massudy/easyai/core/ChatModule/Chat.js';
 import ChatPrompt from '@massudy/easyai/core/MenuCLI/Sandbox/ChatPrompt.js';
 
+/**
+ * @param {Object} config - Configuration options for setting up the Brain instance.
+ * @param {number} [config.port=3000] - Specifies the port on which the HTTP server will listen.
+ * @param {string} [config.easyai_url='localhost'] - The URL of the EasyAI server, defaults to 'localhost' if not provided and no OpenAI token is specified.
+ * @param {number} [config.easyai_port] - The port on which the EasyAI server will listen, defaults to 4000 if `easyai_url` is 'localhost'.
+ * @param {string} [config.openai_token] - Token for accessing OpenAI's services, required if not using a local EasyAI setup.
+ * @param {string} [config.openai_model] - The specific OpenAI model to use for generating responses.
+ * @param {Function} [config.processInputFunction] - An asynchronous function that processes user input, calls the AI model, and manages output tokens. 
+ */
+
+
 class Brain {
     constructor(config = {}) {
         
