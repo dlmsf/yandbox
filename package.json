@@ -1,6 +1,6 @@
 {
   "name": "@massudy/brain",
-  "version": "0.0.61",
+  "version": "0.0.62",
   "description": "",
   "main": "Brain.js",
   "type": "module",
