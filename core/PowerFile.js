@@ -22,19 +22,31 @@ class PowerFile {
    */
   static writeFile = util.promisify(fs.writeFile);
 
-  /**
-   * Indexes the file content and returns an array of objects with the character and its index.
-   * @param {string} path - The file path.
-   * @returns {Promise<Array<{index: number, char: string}>>} The indexed file content.
-   */
-  static async Index(path) {
-    try {
-      const data = await PowerFile.readFile(path, 'utf8');
-      return data.split('').map((char, index) => ({ index, char }));
-    } catch (error) {
-      console.error(`Error reading file: ${error}`);
-    }
+ /**
+ * Indexes the file content and returns an array of objects with the character and its index.
+ * @param {string} path - The file path.
+ * @param {Object} [config] - Configuration object (optional).
+ * @param {number} [config.startIndex] - The start index (inclusive).
+ * @param {number} [config.finishIndex] - The finish index (exclusive).
+ * @returns {Promise<Array<{index: number, char: string}>>} The indexed file content.
+ */
+static async Index(path, config = {}) {
+  try {
+    const data = await PowerFile.readFile(path, 'utf8');
+    let startIndex = config.startIndex || 0;
+    let finishIndex = config.finishIndex || data.length;
+
+    // Adjust indices to fit within the data length
+    startIndex = Math.max(0, Math.min(startIndex, data.length));
+    finishIndex = Math.max(0, Math.min(finishIndex, data.length));
+
+    return data.slice(startIndex, finishIndex).split('').map((char, index) => ({ index: startIndex + index, char }));
+  } catch (error) {
+    console.error(`Error reading file: ${error}`);
+    return [];
   }
+}
+
 
   /**
    * Replaces the content between two indexes in the file.
