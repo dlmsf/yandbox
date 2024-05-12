@@ -69,37 +69,55 @@ static async Index(path, config = {}) {
 
 
 
-  /**
-   * Replaces the content between two indexes in the file.
-   * @param {string} path - The file path.
-   * @param {Object} replace - The replace object with the following properties:
-   * @param {number} replace.index1 - The start index.
-   * @param {number} replace.index2 - The end index.
-   * @param {string} replace.content - The content to replace with.
-   * @returns {Promise<void>} A promise that resolves when the file is updated.
-   */
-  static async Replace(path, replace) {
-    try {
-      const data = await PowerFile.Index(path);
-      const start = data[replace.index1];
-      const end = data[replace.index2];
-      const updatedData = [
-        ...data.slice(0, replace.index1),
-        start,
-        ...Array.from(replace.content, (char, i) => ({
-          index: replace.index1 + i + 1,
-          char,
-        })),
-        end,
-        ...data.slice(replace.index2 + 1),
-      ];
-      const content = updatedData.map(({ char }) => char).join('');
-      await PowerFile.writeFile(path, content);
-    } catch (error) {
-      console.error(`Error replacing content: ${error}`);
-    }
+ /**
+ * Replaces the content between two indexes in the file while keeping the start and end indexes intact.
+ * The characters at the start and end indexes are included in the replacement.
+ * @param {string} path - The file path.
+ * @param {Object} config - The configuration object with the following properties:
+ * @param {number} config.startIndex - The start index of the content to replace (inclusive).
+ * @param {number} config.endIndex - The end index of the content to replace (inclusive).
+ * @param {string} config.content - The new content to replace with.
+ * @returns {Promise<void>} A promise that resolves when the file is updated.
+ *
+ * @example
+ * // Replace content between indexes 5 and 10 with 'replacement'
+ * await PowerFile.Replace('path/to/file.txt', {
+ *   startIndex: 5,
+ *   endIndex: 10,
+ *   content: 'replacement'
+ * });
+ */
+static async Replace(path, config) {
+  try {
+    // Read the file and get its content as an array of objects with index and char properties
+    const data = await PowerFile.Index(path);
+
+    // Retrieve the characters to be replaced
+    const start = data[config.startIndex];
+    const end = data[config.endIndex];
+
+    // Construct the updatedData array by inserting the new content at the specified indexes
+    const updatedData = [
+      ...data.slice(0, config.startIndex),
+      start,
+      ...Array.from(config.content, (char, i) => ({
+        index: config.startIndex + i + 1,
+        char,
+      })),
+      end,
+      ...data.slice(config.endIndex + 1),
+    ];
+
+    // Construct the content string by joining all characters in the updatedData array
+    const content = updatedData.map(({ char }) => char).join('');
+
+    // Write the updated content back to the file
+    await PowerFile.writeFile(path, content);
+  } catch (error) {
+    console.error(`Error replacing content: ${error}`);
   }
-  
+}
+
   
 
   /**
