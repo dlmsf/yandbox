@@ -1,5 +1,5 @@
-import fs from 'fs';
-import util from 'util';
+import fs from 'fs'
+import util from 'util'
 
 /**
  * A class for manipulating file content.
@@ -28,7 +28,8 @@ class PowerFile {
  * @param {Object} [config] - Configuration object (optional).
  * @param {number} [config.startIndex] - The start index (inclusive).
  * @param {number} [config.finishIndex] - The finish index (exclusive).
- * @returns {Promise<Array<{index: number, char: string}>>} The indexed file content.
+ * @param {boolean} [config.minified] - If true, returns the result in a minified string format.
+ * @returns {Promise<string|Array<{index: number, char: string}>>} The indexed file content.
  */
 static async Index(path, config = {}) {
   try {
@@ -40,7 +41,13 @@ static async Index(path, config = {}) {
     startIndex = Math.max(0, Math.min(startIndex, data.length));
     finishIndex = Math.max(0, Math.min(finishIndex, data.length));
 
-    return data.slice(startIndex, finishIndex).split('').map((char, index) => ({ index: startIndex + index, char }));
+    const result = data.slice(startIndex, finishIndex).split('').map((char, index) => ({ index: startIndex + index, char }));
+
+    if (config.minified) {
+      return result.map(({ index, char }) => `index${index}:${char}`).join('\n');
+    }
+
+    return result;
   } catch (error) {
     console.error(`Error reading file: ${error}`);
     return [];
