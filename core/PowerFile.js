@@ -70,53 +70,56 @@ static async Index(path, config = {}) {
 
 
  /**
- * Replaces the content between two indexes in the file while keeping the start and end indexes intact.
- * The characters at the start and end indexes are included in the replacement.
- * @param {string} path - The file path.
- * @param {Object} config - The configuration object with the following properties:
- * @param {number} config.startIndex - The start index of the content to replace (inclusive).
- * @param {number} config.endIndex - The end index of the content to replace (inclusive).
- * @param {string} config.content - The new content to replace with.
- * @returns {Promise<void>} A promise that resolves when the file is updated.
+ * This method is designed to replace the content between two specified indexes in a file.
+ * The characters at the start and end indexes are not replaced and remain intact.
+ * @param {string} path - The file path where the replacement should occur.
+ * @param {Object} config - The configuration object that holds the necessary information for the replacement. It contains the following properties:
+ * @param {number} config.startIndex - The starting index of the content to replace. This character will not be replaced.
+ * @param {number} config.endIndex - The ending index of the content to replace. This character will not be replaced.
+ * @param {string} config.content - The new content that will replace the original content between the start and end indexes.
+ * @returns {Promise<void>} A promise that resolves when the file is successfully updated.
  *
  * @example
- * // Replace content between indexes 5 and 10 with 'replacement'
+ * // Given a file with the content '0123456789abcdef', the following call:
  * await PowerFile.Replace('path/to/file.txt', {
- *   startIndex: 5,
- *   endIndex: 10,
- *   content: 'replacement'
+ *   startIndex: 5,  // '5' will not be replaced
+ *   endIndex: 10,  // 'a' will not be replaced
+ *   content: 'REPL'
  * });
+ * // Will result in the file content being '012345REPLabcdef'. As you can see, the characters at indexes 6, 7, 8, and 9 have been replaced with 'REPL'.
  */
 static async Replace(path, config) {
   try {
-    // Read the file and get its content as an array of objects with index and char properties
+    // Read the file and convert its content into an array of objects. Each object contains an index and a char property.
     const data = await PowerFile.Index(path);
 
-    // Retrieve the characters to be replaced
+    // Retrieve the characters at the start and end indexes. These characters will not be replaced.
     const start = data[config.startIndex];
     const end = data[config.endIndex];
 
-    // Construct the updatedData array by inserting the new content at the specified indexes
+    // Create a new array called updatedData. This array will contain the original data up to the start index,
+    // the character at the start index, the new content, the character at the end index, and the original data after the end index.
     const updatedData = [
-      ...data.slice(0, config.startIndex),
-      start,
+      ...data.slice(0, config.startIndex), // Original data up to the start index
+      start, // Character at the start index
       ...Array.from(config.content, (char, i) => ({
-        index: config.startIndex + i + 1,
+        index: config.startIndex + i + 1, // Assign new indexes to the new content
         char,
-      })),
-      end,
-      ...data.slice(config.endIndex + 1),
+      })), // The new content
+      end, // Character at the end index
+      ...data.slice(config.endIndex + 1), // Original data after the end index
     ];
 
-    // Construct the content string by joining all characters in the updatedData array
+    // Convert the updatedData array back into a string by joining all the characters together.
     const content = updatedData.map(({ char }) => char).join('');
 
-    // Write the updated content back to the file
+    // Write the updated content back to the file.
     await PowerFile.writeFile(path, content);
   } catch (error) {
     console.error(`Error replacing content: ${error}`);
   }
 }
+
 
   
 
