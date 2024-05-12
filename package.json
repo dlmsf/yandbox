@@ -11,6 +11,6 @@
   "author": "Daniel Massud",
   "license": "ISC",
   "dependencies": {
-    "@massudy/easyai": "^0.4.35"
+    "@massudy/easyai": "^0.4.88"
   }
 }
