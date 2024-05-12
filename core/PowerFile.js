@@ -22,13 +22,16 @@ class PowerFile {
    */
   static writeFile = util.promisify(fs.writeFile);
 
- /**
+/**
  * Indexes the file content and returns an array of objects with the character and its index.
+ * If config.saveToFile is true, saves the result in a file named 'fileindex.txt'.
+ * If config.minified is true, returns the result in a minified string format.
  * @param {string} path - The file path.
  * @param {Object} [config] - Configuration object (optional).
  * @param {number} [config.startIndex] - The start index (inclusive).
  * @param {number} [config.finishIndex] - The finish index (exclusive).
  * @param {boolean} [config.minified] - If true, returns the result in a minified string format.
+ * @param {boolean} [config.saveToFile] - If true, saves the result in a file named 'fileindex.txt'.
  * @returns {Promise<string|Array<{index: number, char: string}>>} The indexed file content.
  */
 static async Index(path, config = {}) {
@@ -44,7 +47,17 @@ static async Index(path, config = {}) {
     const result = data.slice(startIndex, finishIndex).split('').map((char, index) => ({ index: startIndex + index, char }));
 
     if (config.minified) {
-      return result.map(({ index, char }) => `index${index}:${char}`).join('\n');
+      const minifiedResult = result.map(({ index, char }) => `index${index}:${char.replace(/\n/g, '\\n')}`).join('\n');
+      if (config.saveToFile) {
+        await PowerFile.writeFile('fileindex.txt', minifiedResult);
+        return 'Result saved in fileindex.txt';
+      }
+      return minifiedResult;
+    }
+
+    if (config.saveToFile) {
+      await PowerFile.writeFile('fileindex.txt', JSON.stringify(result));
+      return 'Result saved in fileindex.txt';
     }
 
     return result;
@@ -53,6 +66,7 @@ static async Index(path, config = {}) {
     return [];
   }
 }
+
 
 
   /**
