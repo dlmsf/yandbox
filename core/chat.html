@@ -11,8 +11,6 @@
     const sendButton = document.getElementById('send-button');
     const chatContent = document.getElementById('chat-content');
 
-    const ws = new WebSocket('ws://localhost:3001');
-
     // Use this to save chat history periodically or upon certain events
     function saveChatState() {
         const chatHistory = document.getElementById('chat-content').innerHTML;
@@ -33,39 +31,6 @@
     // Variable to keep track of whether a response is being processed
     let responseBeingProcessed = false;
 
-    ws.onopen = () => {
-        console.log('WebSocket connection established');
-    };
-
-    ws.onmessage = (event) => {
-    if (event.data === "END_OF_RESPONSE") {
-        // Re-enable input field and send button after receiving the end signal
-        chatInput.disabled = false;
-        sendButton.disabled = false;
-        responseBeingProcessed = false; // Reset flag
-        chatInput.focus();
-        return; // Don't process this message any further
-    }
-
-    let parsed = JSON.parse(event.data)
-
-    if(parsed.type == 'token') {
-
-    if (!aiMessageContainer) {
-        aiMessageContainer = document.createElement('div');
-        aiMessageContainer.classList.add('chat-message');
-        aiMessageContainer.textContent = 'AI:'; // Initialize AI label
-        chatContent.appendChild(aiMessageContainer);
-    }
-
-    // Directly concatenate received token to the AI message container without adding space
-    aiMessageContainer.textContent += parsed.token; // Direct concatenation here
-    chatContent.scrollTop = chatContent.scrollHeight;
-
-    }
-};
-
-
     chatIcon.addEventListener('click', () => {
         chatBox.style.display = 'flex';
         chatIcon.style.display = 'none';
@@ -77,22 +42,81 @@
         chatIcon.style.display = 'flex';
     });
 
-    let aiMessageContainer = null; // Initialize outside to be accessible in sendMessage and ws.onmessage
+    let aiMessageContainer = null;
 
-    const sendMessage = () => {
+    const sendMessage = async () => {
         const message = chatInput.value.trim();
         if (message && !responseBeingProcessed) {
-            // Disable input field and send button only if a response is not being processed
+            // Disable input field and send button
             chatInput.disabled = true;
             sendButton.disabled = true;
 
-            ws.send(message);
             displayMessage(`You: ${message}`, 'user');
             chatInput.value = '';
-            aiMessageContainer = null; // Ensure a new container for AI messages starts with each new user message
+            aiMessageContainer = null;
 
             // Set responseBeingProcessed to true
             responseBeingProcessed = true;
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ message: message })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    
+                    // Process all complete lines
+                    buffer = lines.pop(); // Keep the last incomplete line
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            if (data === '{"type":"end"}') {
+                                // Re-enable input field and send button
+                                chatInput.disabled = false;
+                                sendButton.disabled = false;
+                                responseBeingProcessed = false;
+                                chatInput.focus();
+                                return;
+                            }
+
+                            try {
+                                const parsed = JSON.parse(data);
+                                if (parsed.type === 'token') {
+                                    if (!aiMessageContainer) {
+                                        aiMessageContainer = document.createElement('div');
+                                        aiMessageContainer.classList.add('chat-message');
+                                        aiMessageContainer.textContent = 'AI:';
+                                        chatContent.appendChild(aiMessageContainer);
+                                    }
+                                    aiMessageContainer.textContent += parsed.token;
+                                    chatContent.scrollTop = chatContent.scrollHeight;
+                                }
+                            } catch (e) {
+                                console.error('Error parsing SSE data:', e);
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Error sending message:', error);
+                chatInput.disabled = false;
+                sendButton.disabled = false;
+                responseBeingProcessed = false;
+            }
         }
     };
 
@@ -112,9 +136,8 @@
         chatContent.appendChild(messageDiv);
         chatContent.scrollTop = chatContent.scrollHeight;
     }
-
-
 }
+
 document.addEventListener('DOMContentLoaded', initializeChat);
 </script>
 <title>Chat</title>
@@ -158,7 +181,7 @@ document.addEventListener('DOMContentLoaded', initializeChat);
         position: absolute;
         top: 10px;
         right: 10px;
-        display: none; /* Hide by default, show only when chat box is open */
+        display: none;
     }
     #close-icon::before, #close-icon::after {
         content: '';
@@ -176,22 +199,20 @@ document.addEventListener('DOMContentLoaded', initializeChat);
         transform: rotate(-45deg);
     }
     #chat-box {
-    background-color: #007BFF;
-    color: white;
-    padding: 15px;
-    border-radius: 15px 15px 15px 15px; 
-    display: none;
-    flex-direction: column;
-    overflow: hidden;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    width: 300px; 
-    position: absolute;
-    bottom: 0; 
-    right: 0; 
-    transition: all 0.3s ease-in-out;
-}
-
-
+        background-color: #007BFF;
+        color: white;
+        padding: 15px;
+        border-radius: 15px 15px 15px 15px; 
+        display: none;
+        flex-direction: column;
+        overflow: hidden;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        width: 300px; 
+        position: absolute;
+        bottom: 0; 
+        right: 0; 
+        transition: all 0.3s ease-in-out;
+    }
     #chat-content {
         overflow-y: auto;
         max-height: 300px;
@@ -226,7 +247,7 @@ document.addEventListener('DOMContentLoaded', initializeChat);
         color: #333;
     }
     #chat-input:focus {
-    outline: none;
+        outline: none;
     }
     #chat-input::placeholder {
         color: #666;
@@ -261,10 +282,5 @@ document.addEventListener('DOMContentLoaded', initializeChat);
         </div>
     </div>
 </div>
-
-<script>
-    </script>
-    
-
 </body>
 </html>

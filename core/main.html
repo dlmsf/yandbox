@@ -2,16 +2,6 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <script>
-        const ws = new WebSocket('ws://localhost:3000');
-        
-        ws.onmessage = function(event) {
-            const data = JSON.parse(event.data);
-            if (data.type === 'update-html') {
-                document.body.innerHTML = data.html; // Replace the body's inner HTML with new content
-            }
-        };
-    </script>
     <meta charset="UTF-8">
     <title>Blank Page</title>
 </head>

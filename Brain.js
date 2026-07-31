@@ -1,52 +1,51 @@
 import http from 'http';
-import WebSocket from './core/WebSocket.js';
-import { readFileSync, existsSync, copyFileSync,watch } from 'fs';
+import { readFileSync, existsSync, copyFileSync, watch } from 'fs';
 import path from 'path';
-import EasyAI from '@massudy/easyai';
-import Chat from '@massudy/easyai/core/ChatModule/Chat.js';
-import ChatPrompt from '@massudy/easyai/core/MenuCLI/Sandbox/ChatPrompt.js';
-
-/**
- * @param {Object} config - Configuration options for setting up the Brain instance.
- * @param {number} [config.port=3000] - Specifies the port on which the HTTP server will listen.
- * @param {string} [config.easyai_url='localhost'] - The URL of the EasyAI server, defaults to 'localhost' if not provided and no OpenAI token is specified.
- * @param {number} [config.easyai_port] - The port on which the EasyAI server will listen, defaults to 4000 if `easyai_url` is 'localhost'.
- * @param {string} [config.openai_token] - Token for accessing OpenAI's services, required if not using a local EasyAI setup.
- * @param {string} [config.openai_model] - The specific OpenAI model to use for generating responses.
- * @param {Function} [config.processInputFunction] - An asynchronous function that processes user input, calls the AI model, and manages output tokens. 
- */
-
+import { URL } from 'url';
+import EasyAI from '/home/new/ai/EasyAI.js';
+import Chat from '/home/new/ai/core/ChatModule/Chat.js';
+import ChatPrompt from '/home/new/ai/core/MenuCLI/Sandbox/ChatPrompt.js';
 
 class Brain {
     constructor(config = {}) {
-        
-        this.Chat = new Chat()
-
+        this.Chat = new Chat();
         this.port = config.port || 3000;
-        this.easyai_url = config.easyai_url || ((config.openai_token) ? undefined : 'localhost')
-        this.easyai_port = config.easyai_port || (this.easyai_url == 'localhost') ? 4000 : undefined
-        this.AI = new EasyAI({server_url : this.easyai_url,server_port : this.easyai_port,openai_token : config.openai_token,openai_model : config.openai_model})
-        this.processInputFunction = async (input,displayToken) => {
-            this.Chat.NewMessage('User: ',input)
-            let historical_prompt = ''
+        this.easyai_url = config.easyai_url || ((config.openai_token) ? undefined : 'localhost');
+        this.easyai_port = config.easyai_port || (this.easyai_url == 'localhost') ? 4000 : undefined;
+        this.AI = new EasyAI({
+            server_url: this.easyai_url,
+            server_port: this.easyai_port,
+            openai_token: config.openai_token,
+            openai_model: config.openai_model
+        });
+        
+        this.processInputFunction = async (input, displayToken) => {
+            this.Chat.NewMessage('User: ', input);
+            let historical_prompt = '';
             this.Chat.Historical.forEach(e => {
-             historical_prompt = `${historical_prompt}${e.Sender}${e.Content} | `
-            })
-            let result = await this.AI.Generate(`${ChatPrompt}${historical_prompt}AI:`,{tokenCallback : async (token) => {await displayToken(token.stream.content)},stop : ['|']})
-            this.Chat.NewMessage('AI: ',result.full_text)
-        }
+                historical_prompt = `${historical_prompt}${e.Sender}${e.Content} | `;
+            });
+            let result = await this.AI.Generate(`${ChatPrompt}${historical_prompt}AI:`, {
+                tokenCallback: async (token) => { await displayToken(token.stream.content); },
+                stop: ['|']
+            });
+            this.Chat.NewMessage('AI: ', result.full_text);
+            return result;
+        };
+        
+        // Store active SSE connections
+        this.sseClients = new Set();
         
         this.ensureBaseFiles();
         this.initServer();
     }
 
     ensureBaseFiles() {
-        const files = ['chat.html', 'main.html','index.html'];
+        const files = ['chat.html', 'main.html', 'index.html'];
         files.forEach(file => {
             const rootPath = path.join(process.cwd(), file);
             const corePath = path.join(process.cwd(), 'core', file);
             if (!existsSync(rootPath)) {
-                // Copy file from core to root if it doesn't exist in the root
                 copyFileSync(corePath, rootPath);
                 console.log(`${file} copied to root directory.`);
             }
@@ -54,19 +53,45 @@ class Brain {
     }
 
     initServer() {
-        const server = http.createServer((req, res) => {
-            if (req.url === '/') {
-                // Serve the combined index.html
+        const server = http.createServer(async (req, res) => {
+            const url = new URL(req.url, `http://${req.headers.host}`);
+            const pathname = url.pathname;
+            
+            // Handle CORS
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+            
+            if (req.method === 'OPTIONS') {
+                res.writeHead(204);
+                res.end();
+                return;
+            }
+
+            // SSE endpoint for real-time HTML updates
+            if (pathname === '/events') {
+                this.handleSSE(req, res);
+                return;
+            }
+
+            // Chat message endpoint
+            if (pathname === '/chat' && req.method === 'POST') {
+                this.handleChatMessage(req, res);
+                return;
+            }
+
+            // Serve static files
+            if (pathname === '/') {
                 const indexHtml = readFileSync('./index.html').toString();
                 res.writeHead(200, { 'Content-Type': 'text/html' });
                 res.end(indexHtml);
                 return;
             } else {
-                // Serve other files or handle 404
-                const filePath = path.join(process.cwd(), req.url);
+                const filePath = path.join(process.cwd(), pathname);
                 if (existsSync(filePath)) {
                     const fileContent = readFileSync(filePath).toString();
-                    res.writeHead(200, { 'Content-Type': 'text/html' });
+                    const contentType = pathname.endsWith('.html') ? 'text/html' : 'text/plain';
+                    res.writeHead(200, { 'Content-Type': contentType });
                     res.end(fileContent);
                 } else {
                     res.writeHead(404);
@@ -75,32 +100,75 @@ class Brain {
             }
         });
 
-        const ws = new WebSocket(this.port+1)
-
-        
-            ws.on('message', async (socket,message) => {
-                await this.processInputFunction(message, async (responseToken) => {
-                    ws.send(socket,JSON.stringify({type : 'token', token : responseToken})); // Send each token back to the client
-                });
-                ws.send(socket,"END_OF_RESPONSE"); // Signal the end of response processing
-            });
-       
-
+        // Watch for main.html changes
         watch('./main.html', (eventType, filename) => {
             if (eventType === 'change') {
                 const updatedHtml = readFileSync('./main.html', 'utf8');
-               
-                    ws.broadcast(JSON.stringify({ type: 'update-html', html: updatedHtml }));
-               
+                this.broadcastSSE({ type: 'update-html', html: updatedHtml });
             }
         });
 
-
-        server.listen(this.port,() => console.log(`Server and WebSocket listening on port 3000`));
-    
-    
+        server.listen(this.port, () => console.log(`Server listening on port ${this.port}`));
     }
 
+    handleSSE(req, res) {
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive'
+        });
+
+        // Send initial connection message
+        res.write('data: {"type":"connected"}\n\n');
+
+        // Add client to set
+        this.sseClients.add(res);
+
+        // Remove client on close
+        req.on('close', () => {
+            this.sseClients.delete(res);
+        });
+    }
+
+    broadcastSSE(data) {
+        const message = `data: ${JSON.stringify(data)}\n\n`;
+        this.sseClients.forEach(client => {
+            client.write(message);
+        });
+    }
+
+    async handleChatMessage(req, res) {
+        let body = '';
+        
+        req.on('data', chunk => {
+            body += chunk.toString();
+        });
+
+        req.on('end', async () => {
+            try {
+                const { message } = JSON.parse(body);
+                
+                // Set up SSE response for streaming tokens
+                res.writeHead(200, {
+                    'Content-Type': 'text/event-stream',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive'
+                });
+
+                await this.processInputFunction(message, async (responseToken) => {
+                    res.write(`data: ${JSON.stringify({ type: 'token', token: responseToken })}\n\n`);
+                });
+
+                res.write('data: {"type":"end"}\n\n');
+                res.end();
+            } catch (error) {
+                res.writeHead(500);
+                res.end(JSON.stringify({ error: error.message }));
+            }
+        });
+    }
 }
 
 export default Brain;
+
+new Brain();

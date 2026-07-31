@@ -1,9 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <script>
-        
-    </script>
     <meta charset="UTF-8">
     <title>Blank Page</title>
     <style>
@@ -11,17 +8,17 @@
             margin: 0;
             padding: 0;
             height: 100%;
-            overflow: hidden; /* Prevents scrollbars */
+            overflow: hidden;
         }
         iframe {
-            border: 0; /* No border */
+            border: 0;
             position: fixed;
-            bottom: 0; /* Positioned at the bottom */
-            right: 0; /* Positioned on the right */
-            width: 500px; /* Set to the width of the chat UI */
-            height: 500px; /* Set to the height of the chat UI */
-            background: transparent !important; /* Ensures no background color */
-            z-index: 1000; /* High z-index to ensure it's above other content */
+            bottom: 0;
+            right: 0;
+            width: 500px;
+            height: 500px;
+            background: transparent !important;
+            z-index: 1000;
         }
     </style>
 </head>
@@ -32,59 +29,53 @@
     <iframe id="chat-frame" src="chat.html" frameborder="0" allowtransparency="true"></iframe>
 
     <script>
-        // WebSocket connection to handle dynamic updates
-        const ws = new WebSocket('ws://localhost:3001');
-        ws.onmessage = function(event) {
-    try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'update-html') {
-            const mainContent = document.getElementById('main-content');
-            mainContent.innerHTML = ''; // Clear existing content
-            insertAndExecuteScripts(mainContent, data.html);
-        }
-    } catch (e) {
-        console.error(`Failed to parse incoming message: ${e.message}`);
-    }
-};
+        // SSE connection to handle dynamic updates
+        const eventSource = new EventSource('/events');
+        
+        eventSource.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'update-html') {
+                    const mainContent = document.getElementById('main-content');
+                    mainContent.innerHTML = '';
+                    insertAndExecuteScripts(mainContent, data.html);
+                }
+            } catch (e) {
+                console.error(`Failed to parse incoming message: ${e.message}`);
+            }
+        };
+
+        eventSource.onerror = function(error) {
+            console.error('SSE connection error:', error);
+            // Connection will automatically try to reconnect
+        };
 
         function insertAndExecuteScripts(container, htmlString) {
-    // Temporary container for the incoming HTML
-    const tempContainer = document.createElement('div');
-    tempContainer.innerHTML = htmlString;
+            const tempContainer = document.createElement('div');
+            tempContainer.innerHTML = htmlString;
 
-    // Move non-script elements to the real container
-    Array.from(tempContainer.childNodes).forEach(node => {
-        if (node.nodeType === Node.ELEMENT_NODE && node.tagName !== 'SCRIPT') {
-            container.appendChild(node.cloneNode(true));
+            Array.from(tempContainer.childNodes).forEach(node => {
+                if (node.nodeType === Node.ELEMENT_NODE && node.tagName !== 'SCRIPT') {
+                    container.appendChild(node.cloneNode(true));
+                }
+            });
+
+            const scripts = tempContainer.querySelectorAll('script');
+            scripts.forEach(script => {
+                const newScript = document.createElement('script');
+                if (script.src) {
+                    newScript.src = script.src;
+                    newScript.onload = () => console.log('Loaded external script:', script.src);
+                    newScript.onerror = () => console.log('Error loading script:', script.src);
+                } else {
+                    newScript.textContent = script.textContent;
+                }
+                document.body.appendChild(newScript).parentNode.removeChild(newScript);
+            });
         }
-    });
 
-    // Handle and execute scripts
-    const scripts = tempContainer.querySelectorAll('script');
-    scripts.forEach(script => {
-        const newScript = document.createElement('script');
-        if (script.src) {
-            newScript.src = script.src;
-            newScript.onload = () => console.log('Loaded external script:', script.src);
-            newScript.onerror = () => console.log('Error loading script:', script.src);
-        } else {
-            newScript.textContent = script.textContent;
-        }
-        document.body.appendChild(newScript).parentNode.removeChild(newScript);
-    });
-}
-
-        // Initial load of chat.html and main.html
+        // Initial load of main.html
         document.addEventListener('DOMContentLoaded', function() {
-            /*
-            fetch('chat.html')
-                .then(response => response.text())
-                .then(html => {
-                    const chatContainer = document.getElementById('chat-container');
-                    chatContainer.innerHTML = html;
-                    initializeChat()
-                });
-                */
             fetch('main.html')
                 .then(response => response.text())
                 .then(html => {
