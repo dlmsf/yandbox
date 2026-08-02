@@ -2,11 +2,12 @@ import http from 'http';
 import { readFileSync, existsSync, copyFileSync, watch } from 'fs';
 import path from 'path';
 import { URL } from 'url';
-import EasyAI from '/home/new/ai/EasyAI.js';
-import Chat from '/home/new/ai/core/ChatModule/Chat.js';
-import ChatPrompt from '/home/new/ai/core/MenuCLI/Sandbox/ChatPrompt.js';
+import EasyAI from '/usr/local/etc/EasyAI/EasyAI.js';
+import Chat from '/usr/local/etc/EasyAI/core/ChatModule/Chat.js';
+import ChatPrompt from '/usr/local/etc/EasyAI/core/MenuCLI/Sandbox/ChatPrompt.js';
 
-class Brain {
+class YandBox {
+    
     constructor(config = {}) {
         this.Chat = new Chat();
         this.port = config.port || 3000;
@@ -169,6 +170,9 @@ class Brain {
     }
 }
 
-export default Brain;
+export default YandBox;
 
-new Brain();
+if (import.meta.url === `file://${process.argv[1]}`) {
+    //console.log(process.argv[2])
+    new YandBox();
+  }

@@ -1,16 +1,7 @@
 {
-  "name": "@massudy/brain",
   "version": "0.0.70",
-  "description": "",
-  "main": "Brain.js",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "Daniel Massud",
-  "license": "ISC",
-  "dependencies": {
-    "@massudy/easyai": "^0.4.88"
+    "yandbox" : "node YandBox.js"
   }
 }

@@ -39,6 +39,9 @@
                     const mainContent = document.getElementById('main-content');
                     mainContent.innerHTML = '';
                     insertAndExecuteScripts(mainContent, data.html);
+                    
+                    // Extract and update the title from the received HTML
+                    updatePageTitle(data.html);
                 }
             } catch (e) {
                 console.error(`Failed to parse incoming message: ${e.message}`);
@@ -50,9 +53,28 @@
             // Connection will automatically try to reconnect
         };
 
+        function updatePageTitle(htmlString) {
+            // Create a temporary DOM element to parse the HTML
+            const tempContainer = document.createElement('div');
+            tempContainer.innerHTML = htmlString;
+            
+            // Find the title element
+            const titleElement = tempContainer.querySelector('title');
+            if (titleElement && titleElement.textContent) {
+                document.title = titleElement.textContent;
+            }
+        }
+
         function insertAndExecuteScripts(container, htmlString) {
             const tempContainer = document.createElement('div');
             tempContainer.innerHTML = htmlString;
+
+            // Handle title separately
+            const titleElement = tempContainer.querySelector('title');
+            if (titleElement) {
+                document.title = titleElement.textContent;
+                titleElement.remove(); // Remove from temp container after setting
+            }
 
             Array.from(tempContainer.childNodes).forEach(node => {
                 if (node.nodeType === Node.ELEMENT_NODE && node.tagName !== 'SCRIPT') {
@@ -79,7 +101,11 @@
             fetch('main.html')
                 .then(response => response.text())
                 .then(html => {
-                    document.getElementById('main-content').innerHTML = html;
+                    const mainContent = document.getElementById('main-content');
+                    mainContent.innerHTML = html;
+                    
+                    // Also set initial title
+                    updatePageTitle(html);
                 });
         });
     </script>
