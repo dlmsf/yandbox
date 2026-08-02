@@ -1,5 +1,5 @@
 import http from 'http';
-import { readFileSync, existsSync, copyFileSync, watch } from 'fs';
+import { readFileSync, existsSync, writeFileSync, watch } from 'fs';
 import path from 'path';
 import { URL } from 'url';
 import EasyAI from '/usr/local/etc/EasyAI/EasyAI.js';
@@ -37,20 +37,38 @@ class YandBox {
         // Store active SSE connections
         this.sseClients = new Set();
         
+        // Ensure ._/ exists? Not strictly needed; assume it's present.
+        // But we ensure the HTML files exist in the root.
         this.ensureBaseFiles();
         this.initServer();
     }
 
-    ensureBaseFiles() {
-        const files = ['chat.html', 'main.html', 'index.html'];
-        files.forEach(file => {
-            const rootPath = path.join(process.cwd(), file);
-            const corePath = path.join(process.cwd(), 'core', file);
+    async ensureBaseFiles() {
+        // For each required HTML file, if missing in cwd, generate from ._/js module
+        const files = ['index.html', 'chat.html', 'main.html'];
+        const rootDir = process.cwd();
+
+        for (const file of files) {
+            const rootPath = path.join(rootDir, file);
             if (!existsSync(rootPath)) {
-                copyFileSync(corePath, rootPath);
-                console.log(`${file} copied to root directory.`);
+                // Determine the corresponding JS file name
+                const baseName = path.basename(file, '.html');
+                const jsPath = path.join(rootDir, '._', `${baseName}.js`);
+                if (existsSync(jsPath)) {
+                    try {
+                        // Dynamically import the JS module to get the default HTML string
+                        const module = await import(`file://${jsPath}`);
+                        const htmlContent = module.default;
+                        writeFileSync(rootPath, htmlContent, 'utf8');
+                        console.log(`Generated ${file} from ${jsPath}`);
+                    } catch (err) {
+                        console.error(`Failed to generate ${file} from ${jsPath}:`, err);
+                    }
+                } else {
+                    console.warn(`Source JS file ${jsPath} not found; cannot generate ${file}`);
+                }
             }
-        });
+        }
     }
 
     initServer() {
@@ -81,7 +99,7 @@ class YandBox {
                 return;
             }
 
-            // Serve static files
+            // Serve static files from root
             if (pathname === '/') {
                 const indexHtml = readFileSync('./index.html').toString();
                 res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -101,11 +119,15 @@ class YandBox {
             }
         });
 
-        // Watch for main.html changes
+        // Watch for changes to main.html in the root directory
         watch('./main.html', (eventType, filename) => {
             if (eventType === 'change') {
-                const updatedHtml = readFileSync('./main.html', 'utf8');
-                this.broadcastSSE({ type: 'update-html', html: updatedHtml });
+                try {
+                    const updatedHtml = readFileSync('./main.html', 'utf8');
+                    this.broadcastSSE({ type: 'update-html', html: updatedHtml });
+                } catch (err) {
+                    console.error('Error reading main.html on change:', err);
+                }
             }
         });
 
@@ -173,6 +195,5 @@ class YandBox {
 export default YandBox;
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-    //console.log(process.argv[2])
     new YandBox();
-  }
+}
