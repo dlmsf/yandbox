@@ -12,7 +12,7 @@ class YandBox {
         this.Chat = new Chat();
         this.port = config.port || 3000;
         this.easyai_url = config.easyai_url || ((config.openai_token) ? undefined : 'localhost');
-        this.easyai_port = config.easyai_port || (this.easyai_url == 'localhost') ? 4000 : undefined;
+        this.easyai_port = config.easyai_port || ((this.easyai_url == 'localhost') ? 4000 : undefined);
         this.AI = new EasyAI({
             server_url: this.easyai_url,
             server_port: this.easyai_port,
@@ -37,32 +37,33 @@ class YandBox {
         // Store active SSE connections
         this.sseClients = new Set();
         
-        // Ensure ._/ exists? Not strictly needed; assume it's present.
-        // But we ensure the HTML files exist in the root.
-        this.ensureBaseFiles();
-        this.initServer();
+        // Initialize asynchronously - ensure files exist before starting server
+        this.ensureBaseFiles().then(() => {
+            this.initServer();
+        }).catch(err => {
+            console.error('Failed to initialize YandBox:', err);
+            process.exit(1);
+        });
     }
 
     async ensureBaseFiles() {
-        // For each required HTML file, if missing in cwd, generate from ._/js module
         const files = ['index.html', 'chat.html', 'main.html'];
         const rootDir = process.cwd();
 
         for (const file of files) {
             const rootPath = path.join(rootDir, file);
             if (!existsSync(rootPath)) {
-                // Determine the corresponding JS file name
                 const baseName = path.basename(file, '.html');
                 const jsPath = path.join(rootDir, '._', `${baseName}.js`);
                 if (existsSync(jsPath)) {
                     try {
-                        // Dynamically import the JS module to get the default HTML string
                         const module = await import(`file://${jsPath}`);
                         const htmlContent = module.default;
                         writeFileSync(rootPath, htmlContent, 'utf8');
                         console.log(`Generated ${file} from ${jsPath}`);
                     } catch (err) {
                         console.error(`Failed to generate ${file} from ${jsPath}:`, err);
+                        throw err;
                     }
                 } else {
                     console.warn(`Source JS file ${jsPath} not found; cannot generate ${file}`);
@@ -101,17 +102,27 @@ class YandBox {
 
             // Serve static files from root
             if (pathname === '/') {
-                const indexHtml = readFileSync('./index.html').toString();
-                res.writeHead(200, { 'Content-Type': 'text/html' });
-                res.end(indexHtml);
+                try {
+                    const indexHtml = readFileSync('./index.html').toString();
+                    res.writeHead(200, { 'Content-Type': 'text/html' });
+                    res.end(indexHtml);
+                } catch (err) {
+                    res.writeHead(500);
+                    res.end('Error loading index.html');
+                }
                 return;
             } else {
                 const filePath = path.join(process.cwd(), pathname);
                 if (existsSync(filePath)) {
-                    const fileContent = readFileSync(filePath).toString();
-                    const contentType = pathname.endsWith('.html') ? 'text/html' : 'text/plain';
-                    res.writeHead(200, { 'Content-Type': contentType });
-                    res.end(fileContent);
+                    try {
+                        const fileContent = readFileSync(filePath).toString();
+                        const contentType = pathname.endsWith('.html') ? 'text/html' : 'text/plain';
+                        res.writeHead(200, { 'Content-Type': contentType });
+                        res.end(fileContent);
+                    } catch (err) {
+                        res.writeHead(500);
+                        res.end('Error loading file');
+                    }
                 } else {
                     res.writeHead(404);
                     res.end('Not found');
@@ -120,18 +131,22 @@ class YandBox {
         });
 
         // Watch for changes to main.html in the root directory
-        watch('./main.html', (eventType, filename) => {
-            if (eventType === 'change') {
-                try {
-                    const updatedHtml = readFileSync('./main.html', 'utf8');
-                    this.broadcastSSE({ type: 'update-html', html: updatedHtml });
-                } catch (err) {
-                    console.error('Error reading main.html on change:', err);
+        try {
+            watch('./main.html', (eventType, filename) => {
+                if (eventType === 'change') {
+                    try {
+                        const updatedHtml = readFileSync('./main.html', 'utf8');
+                        this.broadcastSSE({ type: 'update-html', html: updatedHtml });
+                    } catch (err) {
+                        console.error('Error reading main.html on change:', err);
+                    }
                 }
-            }
-        });
+            });
+        } catch (err) {
+            console.error('Error setting up file watcher:', err);
+        }
 
-        server.listen(this.port, () => console.log(`Server listening on port ${this.port}`));
+        server.listen(this.port, () => console.log(`YandBox server listening on port ${this.port}`));
     }
 
     handleSSE(req, res) {
@@ -185,15 +200,23 @@ class YandBox {
                 res.write('data: {"type":"end"}\n\n');
                 res.end();
             } catch (error) {
-                res.writeHead(500);
-                res.end(JSON.stringify({ error: error.message }));
+                console.error('Error processing chat message:', error);
+                if (!res.headersSent) {
+                    res.writeHead(500);
+                    res.end(JSON.stringify({ error: error.message }));
+                } else {
+                    res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
+                    res.end();
+                }
             }
         });
     }
 }
 
+// Create and export the YandBox class
 export default YandBox;
 
+// Auto-instantiate if run directly
 if (import.meta.url === `file://${process.argv[1]}`) {
-    new YandBox();
+    const yandbox = new YandBox();
 }
