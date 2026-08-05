@@ -45,8 +45,6 @@ class YandBox {
                 aiConfig.deepinfra_model = this.model;
             }
             this.AI = new EasyAI(aiConfig);
-            // Store reference to the underlying API instance from EasyAI
-            this.DirectAPI = this.provider === 'deepseek' ? this.AI.DeepSeek : this.AI.DeepInfra;
         }
         
         this.sseClients = new Set();
@@ -266,7 +264,7 @@ class YandBox {
             try {
                 const { message } = JSON.parse(body);
                 
-                if (!this.DirectAPI) {
+                if (!this.AI) {
                     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
                     res.write('data: {"type":"token","token":"No API token configured."}\n\n');
                     res.write('data: {"type":"end"}\n\n');
@@ -284,7 +282,8 @@ class YandBox {
                 
                 const messages = [{ role: 'user', content: message }];
                 
-                const result = await this.DirectAPI.Chat(messages, {
+                // Use EasyAI's Chat method with proper configuration
+                const chatConfig = {
                     tokenCallback: async (data) => {
                         const token = data.stream?.content || data.content || '';
                         if (token) {
@@ -292,22 +291,35 @@ class YandBox {
                             res.write(`data: ${JSON.stringify({ type: 'token', token })}\n\n`);
                         }
                     }
-                });
+                };
+                
+                // Set provider-specific flags for EasyAI
+                if (this.provider === 'deepseek') {
+                    chatConfig.deepseek = true;
+                } else {
+                    chatConfig.deepinfra = true;
+                }
+                
+                const result = await this.AI.Chat(messages, chatConfig);
 
                 let cost = 0;
                 let tokens = 0;
                 
+                // Extract cost and tokens from EasyAI's response metadata
                 if (result.metadata?.usage) {
                     const usage = result.metadata.usage;
                     tokens = (usage.prompt_tokens || 0) + (usage.completion_tokens || 0);
                     
-                    // DeepInfra provides estimated_cost directly
+                    // DeepInfra provides estimated_cost directly in the response
                     if (usage.estimated_cost) {
                         cost = usage.estimated_cost;
                     } 
-                    // DeepSeek - use the class's _calculateCost method
-                    else if (typeof this.DirectAPI._calculateCost === 'function') {
-                        cost = this.DirectAPI._calculateCost(this.model, usage);
+                    // DeepSeek - use the _calculateCost from the underlying API instance
+                    else if (this.provider === 'deepseek') {
+                        // Access the DeepSeek instance through EasyAI to get cost calculation
+                        if (this.AI.DeepSeek && typeof this.AI.DeepSeek._calculateCost === 'function') {
+                            cost = this.AI.DeepSeek._calculateCost(this.model, usage);
+                        }
                     }
                 }
                 
