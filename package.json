@@ -2,6 +2,9 @@
   "version": "0.0.70",
   "type": "module",
   "scripts": {
-    "yandbox" : "node YandBox.js"
+    "yandbox" : "node YandBox.js",
+    "reset" : "node YandBox.js reset",
+    "new" : "node YandBox.js new"
+
   }
 }

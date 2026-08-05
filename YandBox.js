@@ -1,6 +1,6 @@
 // YandBox.js - AI-powered HTML page generator with real-time progress and version history
 import http from 'http';
-import { readFileSync, existsSync, writeFileSync, watch } from 'fs';
+import { readFileSync, existsSync, writeFileSync, watch, unlinkSync } from 'fs';
 import path from 'path';
 import { URL } from 'url';
 import readline from 'readline';
@@ -797,6 +797,65 @@ async function parseArgs() {
     const config = {};
     const tokenPath = path.join(process.cwd(), 'yandbox-config.json');
     let saved = existsSync(tokenPath) ? JSON.parse(readFileSync(tokenPath, 'utf8')) : {};
+    
+    // New command - soft reset: removes only HTML files, keeps configs
+    if (args.includes('new')) {
+        console.log('\x1b[33m🆕 Starting fresh with new HTML pages...\x1b[0m\n');
+        
+        const htmlFiles = ['index.html', 'chat.html', 'main.html'];
+        let removed = 0;
+        
+        for (const file of htmlFiles) {
+            const filePath = path.join(process.cwd(), file);
+            if (existsSync(filePath)) {
+                try {
+                    unlinkSync(filePath);
+                    console.log(`\x1b[32m  ✓ Removed ${file}\x1b[0m`);
+                    removed++;
+                } catch (err) {
+                    console.log(`\x1b[31m  ✗ Failed to remove ${file}: ${err.message}\x1b[0m`);
+                }
+            }
+        }
+        
+        if (removed === 0) {
+            console.log('\x1b[90m  No HTML files found to remove.\x1b[0m');
+        } else {
+            console.log(`\n\x1b[36m✓ Cleaned ${removed} HTML file(s). Configs preserved.\x1b[0m`);
+        }
+        console.log('\x1b[90mRun "node YandBox.js" to regenerate fresh pages.\x1b[0m\n');
+        process.exit(0);
+    }
+    
+    // Reset command - full reset: removes all generated files and configs
+    if (args.includes('reset')) {
+        console.log('\x1b[33m🔄 Resetting YandBox...\x1b[0m\n');
+        
+        const filesToRemove = ['index.html', 'chat.html', 'main.html'];
+        const jsonFiles = ['yandbox-config.json', 'yandbox-log.json', 'yandbox-versions.json'];
+        let removed = 0;
+        
+        for (const file of [...filesToRemove, ...jsonFiles]) {
+            const filePath = path.join(process.cwd(), file);
+            if (existsSync(filePath)) {
+                try {
+                    unlinkSync(filePath);
+                    console.log(`\x1b[32m  ✓ Removed ${file}\x1b[0m`);
+                    removed++;
+                } catch (err) {
+                    console.log(`\x1b[31m  ✗ Failed to remove ${file}: ${err.message}\x1b[0m`);
+                }
+            }
+        }
+        
+        if (removed === 0) {
+            console.log('\x1b[90m  Nothing to reset. All files already clean.\x1b[0m');
+        } else {
+            console.log(`\n\x1b[36m✓ Reset complete! Removed ${removed} file(s).\x1b[0m`);
+        }
+        console.log('\x1b[90mRun "node YandBox.js" to start fresh.\x1b[0m\n');
+        process.exit(0);
+    }
     
     if (args.includes('keys') || args.includes('models')) {
         await manageKeys();
