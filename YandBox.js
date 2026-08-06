@@ -15,42 +15,69 @@ class YandBox {
         this.versionsPath = path.join(process.cwd(), 'yandbox-versions.json');
         
         const saved = this.loadConfig();
-        this.keys = saved.keys || {};
-        this.activeKey = config.activeKey || saved.activeKey || null;
-        this.model = config.model || saved.model || null;
-        this.sessionCost = 0;
-        this.totalCost = saved.totalCost || 0;
-        this.requests = [];
-        this.versions = [];
-        this.currentGeneration = null;   // { abortController, backupHtml, chatRes, message }
-        this._originalFetch = null;      // to restore after generation
         
-        if (this.activeKey && this.keys[this.activeKey]) {
-            const keyData = this.keys[this.activeKey];
-            this.token = keyData.token;
-            this.provider = keyData.provider;
-        } else {
-            this.token = null;
-            this.provider = null;
+        // Migrate old format if needed
+        if (!saved.configs && saved.keys) {
+            saved.configs = {};
+            for (const name in saved.keys) {
+                const entry = saved.keys[name];
+                saved.configs[name] = {
+                    provider: entry.provider || (entry.token && entry.token.startsWith('sk-') ? 'deepseek' : 'deepinfra'),
+                    token: entry.token || null,
+                    model: entry.model || null,
+                    serverUrl: null,
+                    serverPort: null,
+                    serverToken: null
+                };
+            }
+            delete saved.keys;
+            saved.activeConfig = saved.activeConfig || Object.keys(saved.configs)[0] || null;
+            this.saveConfigData(saved);
         }
         
+        this.configs = saved.configs || {};
+        this.activeConfigName = config.activeConfig || saved.activeConfig || null;
+        this.totalCost = saved.totalCost || 0;
+        this.sessionCost = 0;
+        this.requests = saved.requests || [];
+        this.versions = [];
+        this.currentGeneration = null;
+        this._originalFetch = null;
+        
+        // Apply active configuration
+        this._applyActiveConfig();
+        
+        // Set default model if none
         if (!this.model && this.provider) {
-            this.model = this.provider === 'deepseek' ? 'deepseek-v4-flash' : 'meta-llama/Meta-Llama-3.1-8B-Instruct';
+            if (this.provider === 'deepseek') {
+                this.model = 'deepseek-v4-flash';
+            } else if (this.provider === 'deepinfra') {
+                this.model = 'meta-llama/Meta-Llama-3.1-8B-Instruct';
+            }
         }
         
         this.saveConfig();
         this.loadVersions();
         
-        if (this.token) {
+        // Instantiate EasyAI based on provider
+        if (this.provider) {
             const aiConfig = {};
+            
             if (this.provider === 'deepseek') {
                 aiConfig.deepseek_token = this.token;
                 aiConfig.deepseek_model = this.model;
-            } else {
+            } else if (this.provider === 'deepinfra') {
                 aiConfig.deepinfra_token = this.token;
                 aiConfig.deepinfra_model = this.model;
+            } else if (this.provider === 'local') {
+                aiConfig.server_url = this.serverUrl || 'http://localhost';
+                aiConfig.server_port = this.serverPort || 4000;
+                aiConfig.server_token = this.serverToken || '';
             }
+            
             this.AI = new EasyAI(aiConfig);
+        } else {
+            this.AI = null;
         }
         
         this.sseClients = new Set();
@@ -65,6 +92,16 @@ class YandBox {
         });
     }
 
+    _applyActiveConfig() {
+        const cfg = this.configs[this.activeConfigName] || {};
+        this.provider = cfg.provider || null;
+        this.token = cfg.token || null;
+        this.model = cfg.model || null;
+        this.serverUrl = cfg.serverUrl || null;
+        this.serverPort = cfg.serverPort || 4000;
+        this.serverToken = cfg.serverToken || null;
+    }
+
     loadConfig() {
         try {
             if (existsSync(this.tokenPath)) {
@@ -75,18 +112,20 @@ class YandBox {
     }
 
     saveConfig() {
-        const config = {
-            keys: this.keys,
-            activeKey: this.activeKey,
-            model: this.model,
+        this.saveConfigData({
+            configs: this.configs,
+            activeConfig: this.activeConfigName,
             totalCost: this.totalCost,
             requests: this.requests.slice(-50)
-        };
-        writeFileSync(this.tokenPath, JSON.stringify(config, null, 2));
+        });
+    }
+
+    saveConfigData(data) {
+        writeFileSync(this.tokenPath, JSON.stringify(data, null, 2));
         
         const log = {
-            totalCost: this.totalCost,
-            requests: this.requests.slice(-100)
+            totalCost: data.totalCost || this.totalCost,
+            requests: (data.requests || this.requests).slice(-100)
         };
         writeFileSync(this.logPath, JSON.stringify(log, null, 2));
     }
@@ -102,7 +141,6 @@ class YandBox {
     }
 
     saveVersions() {
-        // Keep only last 10 versions to limit file size
         if (this.versions.length > 10) {
             this.versions = this.versions.slice(-10);
         }
@@ -121,17 +159,30 @@ class YandBox {
             console.log('\x1b[36m║\x1b[0m' + '  \x1b[1mYandBox AI Page Generator\x1b[0m' + ' '.repeat(w - 28) + '\x1b[36m║\x1b[0m');
             console.log('\x1b[36m' + mid + '\x1b[0m');
             
-            const modelDisplay = (this.model || 'none').length > 30 ? (this.model || 'none').substring(0, 27) + '...' : (this.model || 'none');
+            const providerDisplay = '\x1b[33m' + (this.provider || 'none').toUpperCase() + '\x1b[0m';
+            let modelDisplay;
+            
+            if (this.provider === 'local') {
+                const urlStr = this.serverUrl ? `${this.serverUrl}:${this.serverPort}` : 'localhost:4000';
+                modelDisplay = '\x1b[32m' + (this.model || urlStr) + '\x1b[0m';
+            } else {
+                const modelStr = this.model || 'none';
+                modelDisplay = '\x1b[32m' + (modelStr.length > 30 ? modelStr.substring(0, 27) + '...' : modelStr) + '\x1b[0m';
+            }
             
             const lines = [
-                ['Provider', '\x1b[33m' + (this.provider || 'none').toUpperCase() + '\x1b[0m'],
-                ['Model', '\x1b[32m' + modelDisplay + '\x1b[0m'],
+                ['Provider', providerDisplay],
+                ['Model', modelDisplay],
                 ['Port', '\x1b[34m' + this.port + '\x1b[0m'],
                 ['Requests', '\x1b[35m' + this.requestCount + '\x1b[0m'],
                 ['Session Cost', '\x1b[31m$' + this.sessionCost.toFixed(8) + '\x1b[0m'],
                 ['Total Cost', '\x1b[31m$' + this.totalCost.toFixed(8) + '\x1b[0m'],
                 ['Generation', this.currentGeneration ? '\x1b[33mACTIVE\x1b[0m' : '\x1b[90midle\x1b[0m']
             ];
+            
+            if (this.provider === 'local') {
+                lines.splice(2, 0, ['Server', '\x1b[34m' + (this.serverUrl || 'localhost') + ':' + (this.serverPort || 4000) + '\x1b[0m']);
+            }
             
             lines.forEach(([label, value]) => {
                 const line = ` ${label}: ${value}`;
@@ -145,9 +196,9 @@ class YandBox {
             const lastRequests = this.requests.slice(-5);
             if (lastRequests.length > 0) {
                 lastRequests.forEach(req => {
-                    const modelShort = req.model.substring(0, 22).padEnd(22);
-                    const cost = '$' + req.cost.toFixed(8);
-                    const tokens = String(req.tokens).padEnd(5) + 't';
+                    const modelShort = (req.model || 'unknown').substring(0, 22).padEnd(22);
+                    const cost = '$' + (req.cost || 0).toFixed(8);
+                    const tokens = String(req.tokens || 0).padEnd(5) + 't';
                     const line = ` \x1b[90m${modelShort}\x1b[0m \x1b[31m${cost}\x1b[0m \x1b[33m${tokens}\x1b[0m`;
                     const cleanLine = line.replace(/\x1b\[\d+m/g, '');
                     const padding = w - cleanLine.length - 2;
@@ -203,13 +254,13 @@ class YandBox {
                 return;
             }
 
-            // SSE endpoint (used by index.html and loading template)
+            // SSE endpoint
             if (pathname === '/events') {
                 this.handleSSE(req, res);
                 return;
             }
 
-            // Chat endpoint – now triggers page generation
+            // Chat endpoint
             if (pathname === '/chat' && req.method === 'POST') {
                 this.handleChatMessage(req, res);
                 return;
@@ -251,6 +302,12 @@ class YandBox {
                         res.end(JSON.stringify({ error: err.message }));
                     }
                 });
+                return;
+            }
+
+            // Test connection endpoint
+            if (pathname === '/api/test-connection' && req.method === 'GET') {
+                this.handleTestConnection(req, res);
                 return;
             }
 
@@ -321,7 +378,43 @@ class YandBox {
         });
     }
 
-    // ---------- Generation logic ----------
+    async handleTestConnection(req, res) {
+        if (!this.AI) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ 
+                connected: false, 
+                error: 'No AI instance configured',
+                provider: this.provider
+            }));
+            return;
+        }
+        
+        try {
+            const testMessages = [
+                { role: 'user', content: 'Say "connected" and nothing else.' }
+            ];
+            
+            const result = await this.AI.Chat(testMessages, { stream: false });
+            
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ 
+                connected: true,
+                provider: this.provider,
+                serverUrl: this.serverUrl,
+                serverPort: this.serverPort,
+                response: result?.full_text || result?.choices?.[0]?.message?.content || 'Response received'
+            }));
+        } catch (err) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ 
+                connected: false,
+                error: err.message,
+                provider: this.provider,
+                serverUrl: this.serverUrl,
+                serverPort: this.serverPort
+            }));
+        }
+    }
 
     getLoadingTemplate(progressPercent = 0) {
         return `<!DOCTYPE html>
@@ -355,7 +448,6 @@ class YandBox {
   const cancelBtn = document.getElementById('cancelBtn');
   const versionSelect = document.getElementById('versionSelect');
   
-  // Load versions list
   fetch('/api/versions')
     .then(r => r.json())
     .then(versions => {
@@ -373,16 +465,13 @@ class YandBox {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ index: parseInt(versionSelect.value) })
-    }).then(() => {
-      // The page will be replaced by SSE update-html shortly
-    });
+    }).then(() => {});
   });
   
   cancelBtn.addEventListener('click', () => {
     fetch('/cancel-generation', { method: 'POST' });
   });
   
-  // Listen to progress updates
   const evtSource = new EventSource('/events');
   evtSource.addEventListener('message', (e) => {
     try {
@@ -399,24 +488,20 @@ class YandBox {
 </html>`;
     }
 
-    // Abort current generation without touching main.html (used when reverting while generating)
     abortGeneration() {
         const gen = this.currentGeneration;
         if (!gen) return;
         
-        // Abort the AI request
         if (gen.abortController) {
             gen.abortController.abort();
         }
         
-        // End the chat SSE stream with cancel message
         if (gen.chatRes && !gen.chatRes.writableEnded) {
             gen.chatRes.write(`data: ${JSON.stringify({ type: 'token', token: '❌ Canceled.' })}\n\n`);
             gen.chatRes.write('data: {"type":"end"}\n\n');
             gen.chatRes.end();
         }
         
-        // Restore original fetch if overridden
         if (this._originalFetch) {
             globalThis.fetch = this._originalFetch;
             this._originalFetch = null;
@@ -425,7 +510,6 @@ class YandBox {
         this.currentGeneration = null;
     }
 
-    // Cancel and revert to backup
     cancelGeneration() {
         const gen = this.currentGeneration;
         if (!gen) return;
@@ -433,17 +517,14 @@ class YandBox {
         const backupHtml = gen.backupHtml;
         this.abortGeneration();
         
-        // Restore the previous HTML
         writeFileSync('./main.html', backupHtml, 'utf8');
         this.broadcastSSE({ type: 'update-html', html: backupHtml });
     }
 
-    // Revert to a specific version by index
     async revertToVersion(index) {
         if (index < 0 || index >= this.versions.length) {
             throw new Error('Invalid version index');
         }
-        // Cancel any active generation (without reverting to backup)
         this.abortGeneration();
         
         const versionHtml = this.versions[index].html;
@@ -451,18 +532,15 @@ class YandBox {
         this.broadcastSSE({ type: 'update-html', html: versionHtml });
     }
 
-    // Start the AI generation for a user request
     async startGeneration(message, chatRes) {
-        // Read current main.html as backup
         let currentHtml;
         try {
             currentHtml = readFileSync('./main.html', 'utf8');
         } catch (err) {
             currentHtml = '<html><body></body></html>';
         }
-        const prevLength = currentHtml.length;
+        const prevLength = Math.max(currentHtml.length, 100);
 
-        // Save backup and create generation state
         const abortController = new AbortController();
         this.currentGeneration = {
             abortController,
@@ -471,11 +549,9 @@ class YandBox {
             message
         };
 
-        // Broadcast loading template to all SSE clients (main page)
         const loadingHtml = this.getLoadingTemplate(0);
         this.broadcastSSE({ type: 'update-html', html: loadingHtml });
 
-        // Override global fetch to support abort
         const originalFetch = globalThis.fetch;
         this._originalFetch = originalFetch;
         globalThis.fetch = (url, options) => {
@@ -497,32 +573,68 @@ class YandBox {
             let tokenCount = 0;
 
             const chatConfig = {
-                tokenCallback: async (data) => {
-                    const token = data.stream?.content || data.content || '';
+                stream: true,
+                tokenCallback: (data) => {
+                    let token = null;
+                    
+                    // Handle various response formats from different providers
+                    if (data.stream?.content) {
+                        token = data.stream.content;
+                    } else if (data.content) {
+                        token = data.content;
+                    } else if (data.choices?.[0]?.delta?.content) {
+                        token = data.choices[0].delta.content;
+                    } else if (data.choices?.[0]?.text) {
+                        token = data.choices[0].text;
+                    } else if (typeof data === 'string') {
+                        token = data;
+                    }
+                    
                     if (token) {
                         generatedBuffer += token;
                         tokenCount++;
-                        const percent = Math.min(100, Math.round((generatedBuffer.length / prevLength) * 100));
+                        
+                        const percent = Math.min(99, Math.round((generatedBuffer.length / prevLength) * 100));
                         this.broadcastSSE({ type: 'progress', percent });
                     }
                 }
             };
 
+            // Set provider flags
             if (this.provider === 'deepseek') {
                 chatConfig.deepseek = true;
-            } else {
+            } else if (this.provider === 'deepinfra') {
                 chatConfig.deepinfra = true;
             }
+            // Local provider: no flag needed, EasyAI routes via server_url
 
             const result = await this.AI.Chat(messages, chatConfig);
 
-            // Extract final HTML (remove possible code fences)
-            let finalHtml = generatedBuffer.trim();
-            // Remove leading/trailing ```html fences
-            finalHtml = finalHtml.replace(/^```html\s*/, '').replace(/```$/, '');
-            // If still wrapped in ```, strip
-            if (finalHtml.startsWith('```') && finalHtml.endsWith('```')) {
-                finalHtml = finalHtml.slice(3, -3).trim();
+            // If streaming didn't capture content, extract from result
+            if (!generatedBuffer && result) {
+                if (result.full_text) {
+                    generatedBuffer = result.full_text;
+                } else if (result.choices?.[0]?.message?.content) {
+                    generatedBuffer = result.choices[0].message.content;
+                } else if (typeof result === 'string') {
+                    generatedBuffer = result;
+                }
+            }
+
+            // Send 100% progress
+            this.broadcastSSE({ type: 'progress', percent: 100 });
+
+            // Clean and extract HTML
+            let finalHtml = (generatedBuffer || '').trim();
+            
+            // Remove markdown code fences
+            finalHtml = finalHtml.replace(/^```html\s*\n?/i, '');
+            finalHtml = finalHtml.replace(/\n?```\s*$/i, '');
+            finalHtml = finalHtml.replace(/^```\s*\n?/i, '');
+            finalHtml = finalHtml.replace(/\n?```\s*$/i, '');
+            
+            if (!finalHtml || finalHtml.length < 20) {
+                throw new Error('Generated content is empty or too short');
             }
 
             // Save the new main.html
@@ -540,52 +652,72 @@ class YandBox {
             this.broadcastSSE({ type: 'update-html', html: finalHtml });
 
             // Send success to chat
-            chatRes.write(`data: ${JSON.stringify({ type: 'token', token: '✅ Page updated successfully!' })}\n\n`);
-            chatRes.write('data: {"type":"end"}\n\n');
-            chatRes.end();
+            if (!chatRes.writableEnded) {
+                chatRes.write(`data: ${JSON.stringify({ type: 'token', token: '✅ Page updated successfully!' })}\n\n`);
+                chatRes.write('data: {"type":"end"}\n\n');
+                chatRes.end();
+            }
 
-            // Update cost (optional)
+            // Update request stats
+            this.requestCount++;
+            
+            // Cost calculation using result.metadata
             if (result.metadata?.usage) {
                 const usage = result.metadata.usage;
                 const tokens = (usage.prompt_tokens || 0) + (usage.completion_tokens || 0);
                 let cost = 0;
-                if (usage.estimated_cost) {
+                
+                // Use estimated_cost if available (works for all providers)
+                if (usage.estimated_cost !== undefined && usage.estimated_cost !== null) {
                     cost = usage.estimated_cost;
-                } else if (this.provider === 'deepseek' && this.AI.DeepSeek) {
+                }
+                // Fallback for DeepSeek
+                else if (this.provider === 'deepseek' && this.AI.DeepSeek) {
                     cost = this.AI.DeepSeek._calculateCost(this.model, usage);
                 }
-                if (tokens > 0) {
-                    this.requestCount++;
+                // Fallback for DeepInfra
+                else if (this.provider === 'deepinfra' && this.AI.DeepInfra) {
+                    cost = this.AI.DeepInfra._calculateCost(this.model, usage);
+                }
+                
+                if (tokens > 0 || cost > 0) {
                     this.sessionCost += cost;
                     this.totalCost += cost;
                     this.requests.push({
-                        model: this.model || 'unknown',
+                        model: result.metadata.model || this.model || this.provider,
                         cost,
                         tokens,
                         time: new Date().toLocaleTimeString()
                     });
-                    this.saveConfig();
                 }
+            } else if (this.provider === 'local') {
+                // Local provider - no cost
+                this.requests.push({
+                    model: this.model || 'local-model',
+                    cost: 0,
+                    tokens: tokenCount,
+                    time: new Date().toLocaleTimeString()
+                });
             }
+            
+            this.saveConfig();
 
         } catch (error) {
-            if (error.name === 'AbortError') {
-                // Generation was cancelled
-                // Already handled by abortGeneration / cancelGeneration
-                return;
-            }
-            // Other error
+            if (error.name === 'AbortError') return;
+            
             console.error('Generation error:', error);
-            // Restore backup
-            writeFileSync('./main.html', this.currentGeneration.backupHtml, 'utf8');
-            this.broadcastSSE({ type: 'update-html', html: this.currentGeneration.backupHtml });
+            
+            if (this.currentGeneration?.backupHtml) {
+                writeFileSync('./main.html', this.currentGeneration.backupHtml, 'utf8');
+                this.broadcastSSE({ type: 'update-html', html: this.currentGeneration.backupHtml });
+            }
+            
             if (!chatRes.writableEnded) {
-                chatRes.write(`data: ${JSON.stringify({ type: 'token', token: '❌ Error generating page.' })}\n\n`);
+                chatRes.write(`data: ${JSON.stringify({ type: 'token', token: '❌ Error: ' + error.message })}\n\n`);
                 chatRes.write('data: {"type":"end"}\n\n');
                 chatRes.end();
             }
         } finally {
-            // Restore fetch and clean up
             globalThis.fetch = this._originalFetch;
             this._originalFetch = null;
             this.currentGeneration = null;
@@ -605,14 +737,13 @@ class YandBox {
                 
                 if (!this.AI) {
                     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-                    res.write('data: {"type":"token","token":"No API token configured."}\n\n');
+                    res.write('data: {"type":"token","token":"No AI provider configured. Please run: node YandBox.js keys"}\n\n');
                     res.write('data: {"type":"end"}\n\n');
                     res.end();
                     return;
                 }
 
                 if (this.currentGeneration) {
-                    // Another generation already in progress
                     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
                     res.write(`data: ${JSON.stringify({ type: 'token', token: '⏳ A generation is already in progress. Please wait or cancel it.' })}\n\n`);
                     res.write('data: {"type":"end"}\n\n');
@@ -620,17 +751,14 @@ class YandBox {
                     return;
                 }
                 
-                // Set up SSE response for chat
                 res.writeHead(200, {
                     'Content-Type': 'text/event-stream',
                     'Cache-Control': 'no-cache',
                     'Connection': 'keep-alive'
                 });
 
-                // Send initial chat message
                 res.write(`data: ${JSON.stringify({ type: 'token', token: '🔄 Generating new page...' })}\n\n`);
                 
-                // Start generation asynchronously (it will use res to stream final message)
                 this.startGeneration(message, res);
 
             } catch (error) {
@@ -646,7 +774,7 @@ class YandBox {
     }
 }
 
-// ---------- CLI helpers (unchanged) ----------
+// ---------- CLI helpers ----------
 async function question(q) {
     const rl = readline.createInterface({
         input: process.stdin,
@@ -659,6 +787,7 @@ async function question(q) {
 }
 
 function getModels(provider) {
+    if (provider === 'local') return [];
     const dummyConfig = {};
     if (provider === 'deepseek') {
         dummyConfig.deepseek_token = 'dummy';
@@ -671,6 +800,11 @@ function getModels(provider) {
 }
 
 async function selectModel(provider) {
+    if (provider === 'local') {
+        const modelInput = await question('\n\x1b[36mModel name (optional, Enter to skip):\x1b[0m \x1b[90m> \x1b[0m');
+        return modelInput.trim() || null;
+    }
+    
     const models = getModels(provider);
     const defaultModel = provider === 'deepseek' ? 'deepseek-v4-flash' : 'meta-llama/Meta-Llama-3.1-8B-Instruct';
     
@@ -690,9 +824,29 @@ async function selectModel(provider) {
 
 async function manageKeys() {
     const tokenPath = path.join(process.cwd(), 'yandbox-config.json');
-    const saved = existsSync(tokenPath) ? JSON.parse(readFileSync(tokenPath, 'utf8')) : {};
-    const keys = saved.keys || {};
-    const activeKey = saved.activeKey || null;
+    let saved = existsSync(tokenPath) ? JSON.parse(readFileSync(tokenPath, 'utf8')) : {};
+    
+    // Migrate old format
+    if (!saved.configs && saved.keys) {
+        saved.configs = {};
+        for (const name in saved.keys) {
+            const entry = saved.keys[name];
+            saved.configs[name] = {
+                provider: entry.provider || (entry.token && entry.token.startsWith('sk-') ? 'deepseek' : 'deepinfra'),
+                token: entry.token || null,
+                model: entry.model || null,
+                serverUrl: null,
+                serverPort: null,
+                serverToken: null
+            };
+        }
+        delete saved.keys;
+        saved.activeConfig = saved.activeConfig || Object.keys(saved.configs)[0] || null;
+        writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
+    }
+    
+    const configs = saved.configs || {};
+    const activeConfig = saved.activeConfig || null;
     
     console.clear();
     const w = 50;
@@ -701,24 +855,39 @@ async function manageKeys() {
     const bot = '\x1b[36m╚' + '═'.repeat(w - 2) + '╝\x1b[0m';
     
     console.log(top);
-    console.log('\x1b[36m║\x1b[0m' + '  \x1b[1mAPI Keys Manager\x1b[0m' + ' '.repeat(w - 20) + '\x1b[36m║\x1b[0m');
+    console.log('\x1b[36m║\x1b[0m' + '  \x1b[1mConfiguration Manager\x1b[0m' + ' '.repeat(w - 25) + '\x1b[36m║\x1b[0m');
     console.log(mid);
     
-    const keyNames = Object.keys(keys);
-    if (keyNames.length > 0) {
-        keyNames.forEach((name) => {
-            const isActive = name === activeKey;
+    const configNames = Object.keys(configs);
+    if (configNames.length > 0) {
+        configNames.forEach((name) => {
+            const cfg = configs[name];
+            const isActive = name === activeConfig;
             const prefix = isActive ? '\x1b[32m*\x1b[0m' : ' ';
-            const masked = keys[name].token.substring(0, 8) + '...' + keys[name].token.substring(keys[name].token.length - 4);
-            const provider = keys[name].provider.toUpperCase();
-            const model = (keys[name].model || 'default').substring(0, 20);
-            const line = ` ${prefix} ${name.padEnd(10)} ${provider.padEnd(10)} ${model}`;
+            
+            let providerStr = cfg.provider.toUpperCase();
+            let detailStr = '';
+            
+            if (cfg.provider === 'local') {
+                const urlStr = cfg.serverUrl ? `${cfg.serverUrl}:${cfg.serverPort || 4000}` : 'localhost:4000';
+                detailStr = `\x1b[90m${urlStr}\x1b[0m`;
+            } else if (cfg.token) {
+                const masked = cfg.token.substring(0, 8) + '...' + cfg.token.substring(cfg.token.length - 4);
+                detailStr = `\x1b[90m${masked}\x1b[0m`;
+            }
+            
+            const modelStr = (cfg.model || 'default').substring(0, 20);
+            const line = ` ${prefix} ${name.padEnd(10)} ${providerStr.padEnd(10)} ${modelStr}`;
             const cleanLine = line.replace(/\x1b\[\d+m/g, '');
             console.log('\x1b[36m║\x1b[0m' + line + ' '.repeat(Math.max(0, w - cleanLine.length - 2)) + '\x1b[36m║\x1b[0m');
-            console.log(`\x1b[36m║\x1b[0m   \x1b[90m${masked}\x1b[0m` + ' '.repeat(Math.max(0, w - masked.length - 5)) + '\x1b[36m║\x1b[0m');
+            
+            if (detailStr) {
+                const cleanDetail = detailStr.replace(/\x1b\[\d+m/g, '');
+                console.log('\x1b[36m║\x1b[0m   ' + detailStr + ' '.repeat(Math.max(0, w - cleanDetail.length - 5)) + '\x1b[36m║\x1b[0m');
+            }
         });
     } else {
-        console.log('\x1b[36m║\x1b[0m  No keys saved...' + ' '.repeat(w - 20) + '\x1b[36m║\x1b[0m');
+        console.log('\x1b[36m║\x1b[0m  No configurations saved...' + ' '.repeat(w - 27) + '\x1b[36m║\x1b[0m');
     }
     
     console.log(mid);
@@ -728,60 +897,118 @@ async function manageKeys() {
     const action = await question('\n\x1b[36mAction:\x1b[0m \x1b[90m> \x1b[0m');
     
     if (action === 'a') {
-        console.log('\n\x1b[36mPaste API token:\x1b[0m');
-        console.log('\x1b[90m(DeepSeek tokens start with sk-, others = DeepInfra)\x1b[0m');
-        const token = (await question('\x1b[90m> \x1b[0m')).trim();
-        if (!token) return false;
+        console.log('\n\x1b[36mSelect provider type:\x1b[0m');
+        console.log('  \x1b[33m1\x1b[0m. DeepSeek (cloud API)');
+        console.log('  \x1b[33m2\x1b[0m. DeepInfra (cloud API)');
+        console.log('  \x1b[33m3\x1b[0m. EasyAI Server (local/remote)');
         
-        const provider = token.startsWith('sk-') ? 'deepseek' : 'deepinfra';
-        console.log(`\n\x1b[90mDetected: \x1b[33m${provider.toUpperCase()}\x1b[0m`);
+        const provChoice = await question('\n\x1b[90m> \x1b[0m');
         
-        const name = await question('\x1b[36mKey name (Enter for default):\x1b[0m \x1b[90m> \x1b[0m');
-        const keyName = name.trim() || 'default';
+        let provider, token = null, model = null, serverUrl = null, serverPort = null, serverToken = null;
         
-        keys[keyName] = { token, provider };
-        saved.keys = keys;
+        if (provChoice === '1') {
+            provider = 'deepseek';
+            console.log('\n\x1b[36mPaste DeepSeek API token:\x1b[0m');
+            console.log('\x1b[90m(Starts with sk-...)\x1b[0m');
+            token = (await question('\x1b[90m> \x1b[0m')).trim();
+            if (!token) return false;
+            model = await selectModel('deepseek');
+            
+        } else if (provChoice === '2') {
+            provider = 'deepinfra';
+            console.log('\n\x1b[36mPaste DeepInfra API token:\x1b[0m');
+            token = (await question('\x1b[90m> \x1b[0m')).trim();
+            if (!token) return false;
+            model = await selectModel('deepinfra');
+            
+        } else if (provChoice === '3') {
+            provider = 'local';
+            console.log('\n\x1b[36mEnter EasyAI server URL:\x1b[0m');
+            console.log('\x1b[90mExamples: http://localhost, http://192.168.1.100\x1b[0m');
+            serverUrl = (await question('\x1b[90m> \x1b[0m')).trim();
+            if (!serverUrl) return false;
+            
+            console.log('\n\x1b[36mPort (Enter for default 4000):\x1b[0m');
+            const portStr = (await question('\x1b[90m> \x1b[0m')).trim();
+            serverPort = portStr ? parseInt(portStr) : 4000;
+            
+            console.log('\n\x1b[36mServer token (Enter to skip if no auth):\x1b[0m');
+            serverToken = (await question('\x1b[90m> \x1b[0m')).trim() || null;
+            
+            model = await selectModel('local');
+            
+        } else {
+            return false;
+        }
         
-        if (!saved.activeKey) {
-            saved.activeKey = keyName;
+        const name = await question('\n\x1b[36mConfiguration name (Enter for default):\x1b[0m \x1b[90m> \x1b[0m');
+        const configName = name.trim() || 'default';
+        
+        configs[configName] = {
+            provider,
+            token,
+            model,
+            serverUrl,
+            serverPort,
+            serverToken
+        };
+        
+        saved.configs = configs;
+        if (!saved.activeConfig) {
+            saved.activeConfig = configName;
         }
         
         writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
-        console.log('\x1b[32m✓ Key added! Using default model.\x1b[0m');
-        console.log('\x1b[90m  Run "node YandBox.js models" to change model.\x1b[0m');
+        console.log('\n\x1b[32m✓ Configuration added!\x1b[0m');
+        console.log(`\x1b[90m  Active: ${saved.activeConfig}\x1b[0m`);
         return true;
         
-    } else if (action === 's' && keyNames.length > 0) {
-        const name = await question('\x1b[36mKey name to activate:\x1b[0m \x1b[90m> \x1b[0m');
-        if (keys[name.trim()]) {
-            saved.activeKey = name.trim();
+    } else if (action === 's' && configNames.length > 0) {
+        console.log('\n\x1b[36mAvailable configurations:\x1b[0m');
+        configNames.forEach(name => {
+            const marker = name === activeConfig ? '\x1b[32m* \x1b[0m' : '  ';
+            console.log(`${marker}${name}`);
+        });
+        
+        const name = await question('\n\x1b[36mConfiguration name to activate:\x1b[0m \x1b[90m> \x1b[0m');
+        if (configs[name.trim()]) {
+            saved.activeConfig = name.trim();
             writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
-            console.log('\x1b[32m✓ Active key: ' + name.trim() + '\x1b[0m');
+            console.log('\x1b[32m✓ Active configuration: ' + name.trim() + '\x1b[0m');
+        } else {
+            console.log('\x1b[31m✗ Configuration not found\x1b[0m');
         }
         return true;
         
-    } else if (action === 'm' && keyNames.length > 0) {
-        const targetKey = activeKey || keyNames[0];
-        if (keys[targetKey]) {
-            const model = await selectModel(keys[targetKey].provider);
-            keys[targetKey].model = model;
-            saved.model = model;
-            saved.keys = keys;
-            writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
-            console.log('\x1b[32m✓ Model updated: ' + model + '\x1b[0m');
-        }
+    } else if (action === 'm' && configNames.length > 0) {
+        const targetName = activeConfig || configNames[0];
+        const cfg = configs[targetName];
+        
+        if (!cfg) return true;
+        
+        console.log(`\n\x1b[36mChanging model for: \x1b[33m${targetName}\x1b[0m`);
+        console.log(`\x1b[90mCurrent model: ${cfg.model || 'none'}\x1b[0m`);
+        
+        const newModel = await selectModel(cfg.provider);
+        cfg.model = newModel || null;
+        
+        saved.configs = configs;
+        writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
+        console.log('\x1b[32m✓ Model updated!\x1b[0m');
         return true;
         
-    } else if (action === 'd' && keyNames.length > 0) {
-        const name = await question('\x1b[36mKey name to delete:\x1b[0m \x1b[90m> \x1b[0m');
-        if (keys[name.trim()]) {
-            delete keys[name.trim()];
-            saved.keys = keys;
-            if (saved.activeKey === name.trim()) {
-                saved.activeKey = Object.keys(keys)[0] || null;
+    } else if (action === 'd' && configNames.length > 0) {
+        const name = await question('\n\x1b[36mConfiguration name to delete:\x1b[0m \x1b[90m> \x1b[0m');
+        if (configs[name.trim()]) {
+            delete configs[name.trim()];
+            saved.configs = configs;
+            if (saved.activeConfig === name.trim()) {
+                saved.activeConfig = Object.keys(configs)[0] || null;
             }
             writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
-            console.log('\x1b[32m✓ Key deleted!\x1b[0m');
+            console.log('\x1b[32m✓ Configuration deleted!\x1b[0m');
+        } else {
+            console.log('\x1b[31m✗ Configuration not found\x1b[0m');
         }
         return true;
         
@@ -798,7 +1025,26 @@ async function parseArgs() {
     const tokenPath = path.join(process.cwd(), 'yandbox-config.json');
     let saved = existsSync(tokenPath) ? JSON.parse(readFileSync(tokenPath, 'utf8')) : {};
     
-    // New command - soft reset: removes only HTML files, keeps configs
+    // Migrate old format
+    if (!saved.configs && saved.keys) {
+        saved.configs = {};
+        for (const name in saved.keys) {
+            const entry = saved.keys[name];
+            saved.configs[name] = {
+                provider: entry.provider || (entry.token && entry.token.startsWith('sk-') ? 'deepseek' : 'deepinfra'),
+                token: entry.token || null,
+                model: entry.model || null,
+                serverUrl: null,
+                serverPort: null,
+                serverToken: null
+            };
+        }
+        delete saved.keys;
+        saved.activeConfig = saved.activeConfig || Object.keys(saved.configs)[0] || null;
+        writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
+    }
+    
+    // Handle 'new' command
     if (args.includes('new')) {
         console.log('\x1b[33m🆕 Starting fresh with new HTML pages...\x1b[0m\n');
         
@@ -827,7 +1073,7 @@ async function parseArgs() {
         process.exit(0);
     }
     
-    // Reset command - full reset: removes all generated files and configs
+    // Handle 'reset' command
     if (args.includes('reset')) {
         console.log('\x1b[33m🔄 Resetting YandBox...\x1b[0m\n');
         
@@ -857,71 +1103,148 @@ async function parseArgs() {
         process.exit(0);
     }
     
+    // Handle 'keys' or 'models' command
     if (args.includes('keys') || args.includes('models')) {
         await manageKeys();
         saved = existsSync(tokenPath) ? JSON.parse(readFileSync(tokenPath, 'utf8')) : {};
-        if (saved.activeKey && saved.keys?.[saved.activeKey]) {
+        if (saved.activeConfig && saved.configs?.[saved.activeConfig]) {
             return config;
         }
         process.exit(0);
     }
     
+    // Handle --clear flag
     if (args.includes('--clear')) {
-        writeFileSync(tokenPath, JSON.stringify({ keys: saved.keys || {} }, null, 2));
-        console.log('\x1b[32m✓ Config cleared\x1b[0m');
+        writeFileSync(tokenPath, JSON.stringify({ 
+            configs: saved.configs || {}, 
+            activeConfig: saved.activeConfig || null,
+            totalCost: saved.totalCost || 0
+        }, null, 2));
+        console.log('\x1b[32m✓ Logs cleared (configurations preserved)\x1b[0m');
         process.exit(0);
     }
 
+    // Parse port argument
     for (const arg of args) {
         if (arg.startsWith('--port=')) {
             config.port = parseInt(arg.split('=')[1]);
         }
     }
 
+    // Handle config name or token argument
     for (const arg of args) {
         if (!arg.startsWith('--')) {
+            const configs = saved.configs || {};
+            
+            // Check if it's a saved configuration name
+            if (configs[arg]) {
+                saved.activeConfig = arg;
+                writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
+                console.log(`\n\x1b[32m✓ Activated configuration: ${arg}\x1b[0m\n`);
+                return config;
+            }
+            
+            // Treat as API token (backward compatibility)
             const provider = arg.startsWith('sk-') ? 'deepseek' : 'deepinfra';
-            const name = 'default';
-            saved.keys = saved.keys || {};
-            saved.keys[name] = { token: arg, provider };
-            saved.activeKey = name;
-            saved.model = provider === 'deepseek' ? 'deepseek-v4-flash' : 'meta-llama/Meta-Llama-3.1-8B-Instruct';
+            const defaultModel = provider === 'deepseek' ? 'deepseek-v4-flash' : 'meta-llama/Meta-Llama-3.1-8B-Instruct';
+            
+            configs['default'] = {
+                provider,
+                token: arg,
+                model: defaultModel,
+                serverUrl: null,
+                serverPort: null,
+                serverToken: null
+            };
+            
+            saved.configs = configs;
+            saved.activeConfig = 'default';
             writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
+            
             console.log('\x1b[32m✓ ' + provider.toUpperCase() + ' token saved! Starting with default model.\x1b[0m');
             console.log('\x1b[90m  Run "node YandBox.js models" to change.\x1b[0m\n');
             return config;
         }
     }
 
-    if (!saved.activeKey || !saved.keys?.[saved.activeKey]) {
-        console.log('\x1b[33mNo API key configured.\x1b[0m');
-        console.log('\x1b[90mPaste your API token (sk-... = DeepSeek, other = DeepInfra):\x1b[0m\n');
-        const token = (await question('\x1b[90m> \x1b[0m')).trim();
-        if (!token) {
-            console.log('\x1b[31mNo token provided. Exiting.\x1b[0m');
+    // No configuration found - interactive setup
+    if (!saved.activeConfig || !saved.configs?.[saved.activeConfig]) {
+        console.log('\x1b[33mNo API configuration found.\x1b[0m\n');
+        console.log('\x1b[36mChoose provider type:\x1b[0m');
+        console.log('  \x1b[33m1\x1b[0m. DeepSeek (cloud API)');
+        console.log('  \x1b[33m2\x1b[0m. DeepInfra (cloud API)');
+        console.log('  \x1b[33m3\x1b[0m. EasyAI Server (local/remote)');
+        
+        const choice = await question('\n\x1b[90m> \x1b[0m');
+        
+        let provider, token = null, model = null, serverUrl = null, serverPort = null, serverToken = null;
+        
+        if (choice === '1') {
+            provider = 'deepseek';
+            console.log('\n\x1b[36mPaste DeepSeek API token:\x1b[0m');
+            token = (await question('\x1b[90m> \x1b[0m')).trim();
+            if (!token) {
+                console.log('\x1b[31mNo token provided. Exiting.\x1b[0m');
+                process.exit(0);
+            }
+            model = 'deepseek-v4-flash';
+            
+        } else if (choice === '2') {
+            provider = 'deepinfra';
+            console.log('\n\x1b[36mPaste DeepInfra API token:\x1b[0m');
+            token = (await question('\x1b[90m> \x1b[0m')).trim();
+            if (!token) {
+                console.log('\x1b[31mNo token provided. Exiting.\x1b[0m');
+                process.exit(0);
+            }
+            model = 'meta-llama/Meta-Llama-3.1-8B-Instruct';
+            
+        } else if (choice === '3') {
+            provider = 'local';
+            console.log('\n\x1b[36mEnter EasyAI server URL:\x1b[0m');
+            console.log('\x1b[90mExample: http://localhost\x1b[0m');
+            serverUrl = (await question('\x1b[90m> \x1b[0m')).trim();
+            if (!serverUrl) {
+                console.log('\x1b[31mNo URL provided. Exiting.\x1b[0m');
+                process.exit(0);
+            }
+            
+            console.log('\n\x1b[36mPort (Enter for default 4000):\x1b[0m');
+            const portStr = (await question('\x1b[90m> \x1b[0m')).trim();
+            serverPort = portStr ? parseInt(portStr) : 4000;
+            
+            console.log('\n\x1b[36mServer token (Enter to skip):\x1b[0m');
+            serverToken = (await question('\x1b[90m> \x1b[0m')).trim() || null;
+            
+            model = null;
+            
+        } else {
+            console.log('\x1b[31mInvalid choice. Exiting.\x1b[0m');
             process.exit(0);
         }
         
-        const provider = token.startsWith('sk-') ? 'deepseek' : 'deepinfra';
-        const name = 'default';
-        saved.keys = saved.keys || {};
-        saved.keys[name] = { token, provider };
-        saved.activeKey = name;
-        saved.model = provider === 'deepseek' ? 'deepseek-v4-flash' : 'meta-llama/Meta-Llama-3.1-8B-Instruct';
+        const configs = saved.configs || {};
+        configs['default'] = {
+            provider,
+            token,
+            model,
+            serverUrl,
+            serverPort,
+            serverToken
+        };
+        
+        saved.configs = configs;
+        saved.activeConfig = 'default';
         writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
-        console.log('\x1b[32m✓ ' + provider.toUpperCase() + ' configured! Starting server...\x1b[0m\n');
+        
+        console.log('\n\x1b[32m✓ Configuration saved! Starting server...\x1b[0m\n');
         return config;
-    }
-
-    if (!saved.model && saved.activeKey && saved.keys?.[saved.activeKey]) {
-        const provider = saved.keys[saved.activeKey].provider;
-        saved.model = provider === 'deepseek' ? 'deepseek-v4-flash' : 'meta-llama/Meta-Llama-3.1-8B-Instruct';
-        writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
     }
 
     return config;
 }
 
+// Start the application
 if (import.meta.url === `file://${process.argv[1]}`) {
     const config = await parseArgs();
     const yandbox = new YandBox(config);
