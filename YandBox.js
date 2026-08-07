@@ -44,6 +44,13 @@ class YandBox {
         this.currentGeneration = null;
         this._originalFetch = null;
         
+        // Progress tracking state
+        this._progressState = {
+            lastPercent: 0,
+            lastUpdateTime: 0,
+            isActive: false
+        };
+        
         // Apply active configuration
         this._applyActiveConfig();
         
@@ -416,6 +423,60 @@ class YandBox {
         }
     }
 
+    /**
+     * Calculate progress percentage using multiple factors
+     * @param {number} generatedLength - Current length of generated buffer
+     * @param {number} estimatedTotal - Estimated total output length
+     * @param {Object} structure - HTML structure markers { tags, closingTags }
+     * @param {number} elapsedSeconds - Time elapsed since generation started
+     * @returns {number} Progress percentage (0-95)
+     */
+    _calculateProgress(generatedLength, estimatedTotal, structure, elapsedSeconds) {
+        // Factor 1: Character-based progress (capped at 80%)
+        const charProgress = Math.min(80, (generatedLength / Math.max(estimatedTotal, 1)) * 100);
+        
+        // Factor 2: Structure-based progress (HTML tag completeness, up to 10%)
+        let structureProgress = 0;
+        if (structure.tags > 0) {
+            const closingRatio = structure.closingTags / structure.tags;
+            structureProgress = Math.min(10, closingRatio * 10);
+        }
+        
+        // Factor 3: Time-based progress for slow generations (up to 5%)
+        const timeProgress = Math.min(5, elapsedSeconds * 1.5);
+        
+        // Combine factors, max 95% (reserve 100% for completion signal)
+        return Math.min(95, Math.round(charProgress + structureProgress + timeProgress));
+    }
+
+    /**
+     * Send progress update with rate limiting
+     * @param {number} percent - Progress percentage to broadcast
+     * @param {boolean} force - Force send regardless of rate limit
+     */
+    _sendProgress(percent, force = false) {
+        const now = Date.now();
+        const state = this._progressState;
+        
+        // Only send if progress changed or enough time passed (250ms minimum between updates)
+        if (force || percent !== state.lastPercent || (now - state.lastUpdateTime) >= 250) {
+            state.lastPercent = percent;
+            state.lastUpdateTime = now;
+            this.broadcastSSE({ type: 'progress', percent });
+        }
+    }
+
+    /**
+     * Reset progress tracking state
+     */
+    _resetProgress() {
+        this._progressState = {
+            lastPercent: 0,
+            lastUpdateTime: 0,
+            isActive: false
+        };
+    }
+
     getLoadingTemplate(progressPercent = 0) {
         return `<!DOCTYPE html>
 <html>
@@ -424,65 +485,110 @@ class YandBox {
   body { font-family: -apple-system, sans-serif; background: #1e1e1e; color: #ccc; display: flex; align-items: center; justify-content: center; height: 100vh; margin:0; }
   .container { text-align: center; max-width: 400px; width: 90%; }
   .progress-bar { width: 100%; height: 8px; background: #333; border-radius: 4px; overflow: hidden; margin: 20px 0; }
-  .progress-fill { height: 100%; width: ${progressPercent}%; background: #0af; transition: width 0.2s; }
+  .progress-fill { height: 100%; width: ${progressPercent}%; background: #0af; transition: width 0.3s ease; }
   .actions { display: flex; gap: 10px; justify-content: center; margin-top: 15px; }
   button, select { background: #2a2a2a; border: 1px solid #444; color: #ddd; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 14px; }
   button:hover { background: #3a3a3a; }
   select { min-width: 200px; }
-  .status { font-size: 13px; color: #aaa; margin-top: 8px; }
+  .status { font-size: 13px; color: #aaa; margin-top: 8px; min-height: 20px; }
 </style>
 </head>
 <body>
 <div class="container">
   <h2>⚡ Generating new page...</h2>
   <div class="progress-bar"><div class="progress-fill" id="fill"></div></div>
-  <div class="status" id="status">0%</div>
+  <div class="status" id="status">Initializing...</div>
   <div class="actions">
     <button id="cancelBtn">✕ Cancel</button>
     <select id="versionSelect"><option value="">← Previous versions</option></select>
   </div>
 </div>
 <script>
-  const fill = document.getElementById('fill');
-  const status = document.getElementById('status');
-  const cancelBtn = document.getElementById('cancelBtn');
-  const versionSelect = document.getElementById('versionSelect');
-  
-  fetch('/api/versions')
-    .then(r => r.json())
-    .then(versions => {
-      versions.forEach(v => {
-        const opt = document.createElement('option');
-        opt.value = v.index;
-        opt.textContent = v.timestamp + ' – ' + v.request;
-        versionSelect.appendChild(opt);
-      });
+  (function() {
+    const fill = document.getElementById('fill');
+    const status = document.getElementById('status');
+    const cancelBtn = document.getElementById('cancelBtn');
+    const versionSelect = document.getElementById('versionSelect');
+    let eventSource = null;
+    let progressReceived = false;
+    
+    // Fetch previous versions
+    fetch('/api/versions')
+      .then(r => r.json())
+      .then(versions => {
+        versions.forEach(v => {
+          const opt = document.createElement('option');
+          opt.value = v.index;
+          opt.textContent = v.timestamp + ' – ' + v.request;
+          versionSelect.appendChild(opt);
+        });
+      })
+      .catch(() => {});
+    
+    versionSelect.addEventListener('change', () => {
+      if (versionSelect.value === '') return;
+      cleanupSSE();
+      fetch('/api/revert', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ index: parseInt(versionSelect.value) })
+      }).catch(() => {});
     });
-  
-  versionSelect.addEventListener('change', () => {
-    if (versionSelect.value === '') return;
-    fetch('/api/revert', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ index: parseInt(versionSelect.value) })
-    }).then(() => {});
-  });
-  
-  cancelBtn.addEventListener('click', () => {
-    fetch('/cancel-generation', { method: 'POST' });
-  });
-  
-  const evtSource = new EventSource('/events');
-  evtSource.addEventListener('message', (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      if (data.type === 'progress') {
-        const p = data.percent || 0;
-        fill.style.width = p + '%';
-        status.textContent = p + '%';
+    
+    cancelBtn.addEventListener('click', () => {
+      cleanupSSE();
+      fetch('/cancel-generation', { method: 'POST' }).catch(() => {});
+    });
+    
+    function cleanupSSE() {
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
       }
-    } catch(ex) {}
-  });
+    }
+    
+    function connectSSE() {
+      cleanupSSE();
+      
+      eventSource = new EventSource('/events');
+      
+      eventSource.addEventListener('message', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          
+          if (data.type === 'progress') {
+            const p = data.percent || 0;
+            fill.style.width = p + '%';
+            status.textContent = p + '%';
+            progressReceived = true;
+          } else if (data.type === 'connected') {
+            if (!progressReceived) {
+              status.textContent = 'Connected...';
+            }
+          } else if (data.type === 'update-html') {
+            cleanupSSE();
+          }
+        } catch(ex) {
+          console.error('SSE parse error:', ex);
+        }
+      });
+      
+      eventSource.addEventListener('error', () => {
+        status.textContent = 'Connection lost, reconnecting...';
+        setTimeout(() => {
+          if (eventSource) {
+            connectSSE();
+          }
+        }, 1000);
+      });
+    }
+    
+    connectSSE();
+    
+    window.addEventListener('beforeunload', () => {
+      cleanupSSE();
+    });
+  })();
 </script>
 </body>
 </html>`;
@@ -507,6 +613,7 @@ class YandBox {
             this._originalFetch = null;
         }
         
+        this._resetProgress();
         this.currentGeneration = null;
     }
 
@@ -539,7 +646,9 @@ class YandBox {
         } catch (err) {
             currentHtml = '<html><body></body></html>';
         }
-        const prevLength = Math.max(currentHtml.length, 100);
+        
+        // Estimate output length based on input size with minimum threshold
+        const estimatedOutputLength = Math.max(currentHtml.length, 500);
 
         const abortController = new AbortController();
         this.currentGeneration = {
@@ -549,8 +658,15 @@ class YandBox {
             message
         };
 
+        // Reset progress state for new generation
+        this._resetProgress();
+        this._progressState.isActive = true;
+
         const loadingHtml = this.getLoadingTemplate(0);
         this.broadcastSSE({ type: 'update-html', html: loadingHtml });
+        
+        // Send initial progress explicitly
+        this._sendProgress(0, true);
 
         const originalFetch = globalThis.fetch;
         this._originalFetch = originalFetch;
@@ -571,6 +687,13 @@ class YandBox {
 
             let generatedBuffer = '';
             let tokenCount = 0;
+            const generationStartTime = Date.now();
+            
+            // Track HTML structure for more accurate progress
+            const htmlStructure = {
+                tags: 0,
+                closingTags: 0
+            };
 
             const chatConfig = {
                 stream: true,
@@ -594,8 +717,20 @@ class YandBox {
                         generatedBuffer += token;
                         tokenCount++;
                         
-                        const percent = Math.min(99, Math.round((generatedBuffer.length / prevLength) * 100));
-                        this.broadcastSSE({ type: 'progress', percent });
+                        // Track HTML structure for progress estimation
+                        if (token.includes('<')) htmlStructure.tags++;
+                        if (token.includes('</')) htmlStructure.closingTags++;
+                        
+                        // Calculate progress
+                        const elapsedSeconds = (Date.now() - generationStartTime) / 1000;
+                        const percent = this._calculateProgress(
+                            generatedBuffer.length, 
+                            estimatedOutputLength, 
+                            htmlStructure, 
+                            elapsedSeconds
+                        );
+                        
+                        this._sendProgress(percent);
                     }
                 }
             };
@@ -622,7 +757,10 @@ class YandBox {
             }
 
             // Send 100% progress
-            this.broadcastSSE({ type: 'progress', percent: 100 });
+            this._sendProgress(100, true);
+            
+            // Small delay for visual completion effect
+            await new Promise(resolve => setTimeout(resolve, 150));
 
             // Clean and extract HTML
             let finalHtml = (generatedBuffer || '').trim();
@@ -721,6 +859,7 @@ class YandBox {
             globalThis.fetch = this._originalFetch;
             this._originalFetch = null;
             this.currentGeneration = null;
+            this._resetProgress();
         }
     }
 
