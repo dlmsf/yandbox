@@ -424,33 +424,56 @@ class YandBox {
     }
 
     /**
-     * Calculate progress percentage using multiple factors
+     * Calculate progress percentage using a fluid, non-stuck algorithm
+     * Uses weighted combination of multiple signals for maximum accuracy
      * @param {number} generatedLength - Current length of generated buffer
      * @param {number} estimatedTotal - Estimated total output length
      * @param {Object} structure - HTML structure markers { tags, closingTags }
      * @param {number} elapsedSeconds - Time elapsed since generation started
+     * @param {number} tokenCount - Number of tokens received so far
      * @returns {number} Progress percentage (0-95)
      */
-    _calculateProgress(generatedLength, estimatedTotal, structure, elapsedSeconds) {
-        // Factor 1: Character-based progress (capped at 80%)
-        const charProgress = Math.min(80, (generatedLength / Math.max(estimatedTotal, 1)) * 100);
+    _calculateProgress(generatedLength, estimatedTotal, structure, elapsedSeconds, tokenCount) {
+        // Factor 1: Character-based progress (weight: 70%)
+        // Uses logarithmic scaling to avoid plateau at the end
+        let charRatio = Math.min(1, generatedLength / Math.max(estimatedTotal, 1));
+        // Apply smooth logarithmic curve to prevent getting stuck at high percentages
+        let charProgress = 70 * (Math.log(1 + 9 * charRatio) / Math.log(10));
         
-        // Factor 2: Structure-based progress (HTML tag completeness, up to 10%)
+        // Factor 2: Structure-based progress (weight: 15%)
+        // Tracks HTML tag completeness more aggressively
         let structureProgress = 0;
         if (structure.tags > 0) {
-            const closingRatio = structure.closingTags / structure.tags;
-            structureProgress = Math.min(10, closingRatio * 10);
+            const closingRatio = Math.min(1, structure.closingTags / Math.max(structure.tags, 1));
+            // Apply easing: slow start, faster middle, slow end
+            structureProgress = 15 * (closingRatio < 0.5 
+                ? 2 * closingRatio * closingRatio 
+                : -1 + (4 - 2 * closingRatio) * closingRatio);
         }
         
-        // Factor 3: Time-based progress for slow generations (up to 5%)
-        const timeProgress = Math.min(5, elapsedSeconds * 1.5);
+        // Factor 3: Time-based progress (weight: 10%)
+        // Adaptive time factor that accelerates initially and decelerates later
+        let timeProgress;
+        if (elapsedSeconds < 3) {
+            timeProgress = 10 * (elapsedSeconds / 3) * 0.5; // Slow ramp up
+        } else if (elapsedSeconds < 15) {
+            timeProgress = 5 + 5 * ((elapsedSeconds - 3) / 12); // Linear middle
+        } else {
+            timeProgress = 10 * (1 - Math.exp(-elapsedSeconds / 30)); // Gradual approach to 10
+        }
         
-        // Combine factors, max 95% (reserve 100% for completion signal)
-        return Math.min(95, Math.round(charProgress + structureProgress + timeProgress));
+        // Factor 4: Token velocity (weight: 5%)
+        // Rewards steady token generation
+        const tokensPerSecond = elapsedSeconds > 0 ? tokenCount / elapsedSeconds : 0;
+        const velocityProgress = Math.min(5, tokensPerSecond * 0.5);
+        
+        // Combine all factors, cap at 95% (reserve last 5% for completion)
+        return Math.min(95, Math.max(0, Math.round(charProgress + structureProgress + timeProgress + velocityProgress)));
     }
 
     /**
-     * Send progress update with rate limiting
+     * Send progress update with adaptive rate limiting
+     * Updates document title for tab visibility
      * @param {number} percent - Progress percentage to broadcast
      * @param {boolean} force - Force send regardless of rate limit
      */
@@ -458,11 +481,20 @@ class YandBox {
         const now = Date.now();
         const state = this._progressState;
         
-        // Only send if progress changed or enough time passed (250ms minimum between updates)
-        if (force || percent !== state.lastPercent || (now - state.lastUpdateTime) >= 250) {
+        // Adaptive rate limiting: faster updates at lower percentages, slower at higher
+        const minInterval = percent < 30 ? 100 : (percent < 60 ? 200 : (percent < 90 ? 300 : 150));
+        const percentChanged = percent !== state.lastPercent;
+        
+        if (force || percentChanged || (now - state.lastUpdateTime) >= minInterval) {
             state.lastPercent = percent;
             state.lastUpdateTime = now;
-            this.broadcastSSE({ type: 'progress', percent });
+            
+            // Broadcast progress to SSE clients
+            this.broadcastSSE({ 
+                type: 'progress', 
+                percent: percent,
+                title: `Generating... ${percent}% - YandBox`
+            });
         }
     }
 
@@ -480,12 +512,12 @@ class YandBox {
     getLoadingTemplate(progressPercent = 0) {
         return `<!DOCTYPE html>
 <html>
-<head><meta charset="UTF-8"><title>Generating...</title>
+<head><meta charset="UTF-8"><title>Generating... ${progressPercent}% - YandBox</title>
 <style>
   body { font-family: -apple-system, sans-serif; background: #1e1e1e; color: #ccc; display: flex; align-items: center; justify-content: center; height: 100vh; margin:0; }
   .container { text-align: center; max-width: 400px; width: 90%; }
   .progress-bar { width: 100%; height: 8px; background: #333; border-radius: 4px; overflow: hidden; margin: 20px 0; }
-  .progress-fill { height: 100%; width: ${progressPercent}%; background: #0af; transition: width 0.3s ease; }
+  .progress-fill { height: 100%; width: ${progressPercent}%; background: linear-gradient(90deg, #0af, #0ff); transition: width 0.2s ease; }
   .actions { display: flex; gap: 10px; justify-content: center; margin-top: 15px; }
   button, select { background: #2a2a2a; border: 1px solid #444; color: #ddd; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 14px; }
   button:hover { background: #3a3a3a; }
@@ -559,7 +591,11 @@ class YandBox {
           if (data.type === 'progress') {
             const p = data.percent || 0;
             fill.style.width = p + '%';
-            status.textContent = p + '%';
+            status.textContent = p + '% Complete';
+            // Update document title for tab visibility
+            if (data.title) {
+              document.title = data.title;
+            }
             progressReceived = true;
           } else if (data.type === 'connected') {
             if (!progressReceived) {
@@ -647,8 +683,8 @@ class YandBox {
             currentHtml = '<html><body></body></html>';
         }
         
-        // Estimate output length based on input size with minimum threshold
-        const estimatedOutputLength = Math.max(currentHtml.length, 500);
+        // Estimate output length based on input size with adaptive scaling
+        const estimatedOutputLength = Math.max(currentHtml.length * 1.5, 800);
 
         const abortController = new AbortController();
         this.currentGeneration = {
@@ -677,8 +713,26 @@ class YandBox {
         };
 
         try {
-            const systemPrompt = `You are an expert web developer. The user wants to modify the HTML page. Provide the complete new HTML code. Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTML is valid and includes all necessary tags.`;
-            const userPrompt = `Current HTML:\n${currentHtml}\n\nUser request: ${message}\n\nNew HTML:`;
+            const systemPrompt = `You are an expert web developer. The user wants to modify the HTML page. Provide the complete new HTML code.
+
+CRITICAL SCROLLING REQUIREMENT - READ THIS FIRST:
+⚠️ THE PAGE MUST BE SCROLLABLE WITH MOUSE WHEEL AND SCROLLBAR ⚠️
+- Set html { overflow-y: auto !important; height: auto !important; }
+- Set body { overflow-y: auto !important; min-height: 100vh !important; }
+- NEVER use "overflow: hidden" on html or body
+- NEVER set "height: 100vh" with "overflow: hidden" on the body
+- NEVER lock the viewport or prevent scrolling
+- Ensure content is longer than viewport to enable natural scrolling
+- If using fixed sections, make sure there's scrollable content below
+- Add enough content, padding, and margins to ensure the page exceeds viewport height
+- Use CSS "overflow-y: scroll" instead of "overflow: hidden" for containers that need scroll
+- The page MUST have a visible scrollbar and respond to mouse wheel scrolling
+- Add padding-bottom: 2rem or more to body to ensure scrollability
+- If the design seems compact, add extra sections or increase content to force scrolling
+
+Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTML is valid, complete with DOCTYPE, and includes all necessary tags. The page MUST be scrollable with mouse and scrollbar.`;
+
+            const userPrompt = `Current HTML:\n${currentHtml}\n\nUser request: ${message}\n\nREMEMBER: The page must be scrollable. DO NOT lock scrolling. Include overflow-y: auto on html/body. Provide complete new HTML:`;
             
             const messages = [
                 { role: 'system', content: systemPrompt },
@@ -718,16 +772,21 @@ class YandBox {
                         tokenCount++;
                         
                         // Track HTML structure for progress estimation
-                        if (token.includes('<')) htmlStructure.tags++;
+                        if (token.includes('<') && !token.includes('</')) htmlStructure.tags++;
                         if (token.includes('</')) htmlStructure.closingTags++;
+                        if (token.includes('/>')) {
+                            htmlStructure.tags++;
+                            htmlStructure.closingTags++;
+                        }
                         
-                        // Calculate progress
+                        // Calculate progress with improved algorithm
                         const elapsedSeconds = (Date.now() - generationStartTime) / 1000;
                         const percent = this._calculateProgress(
                             generatedBuffer.length, 
                             estimatedOutputLength, 
                             htmlStructure, 
-                            elapsedSeconds
+                            elapsedSeconds,
+                            tokenCount
                         );
                         
                         this._sendProgress(percent);
@@ -756,8 +815,13 @@ class YandBox {
                 }
             }
 
-            // Send 100% progress
+            // Send 100% progress with completion title
             this._sendProgress(100, true);
+            this.broadcastSSE({ 
+                type: 'progress', 
+                percent: 100,
+                title: '✓ Complete - YandBox'
+            });
             
             // Small delay for visual completion effect
             await new Promise(resolve => setTimeout(resolve, 150));
@@ -773,6 +837,19 @@ class YandBox {
             
             if (!finalHtml || finalHtml.length < 20) {
                 throw new Error('Generated content is empty or too short');
+            }
+
+            // Ensure scrollability in generated HTML if missing
+            if (!finalHtml.includes('overflow-y') && !finalHtml.includes('overflow-y:')) {
+                // Inject scroll-enabling CSS into the <head> if it exists
+                const scrollCSS = '<style>html{overflow-y:auto!important;height:auto!important}body{overflow-y:auto!important;min-height:100vh!important;padding-bottom:2rem}</style>';
+                if (finalHtml.includes('</head>')) {
+                    finalHtml = finalHtml.replace('</head>', scrollCSS + '</head>');
+                } else if (finalHtml.includes('<head>')) {
+                    finalHtml = finalHtml.replace('<head>', '<head>' + scrollCSS);
+                } else if (finalHtml.includes('<html>')) {
+                    finalHtml = finalHtml.replace('<html>', '<html><head>' + scrollCSS + '</head>');
+                }
             }
 
             // Save the new main.html
