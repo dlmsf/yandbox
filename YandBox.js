@@ -5,6 +5,8 @@ import path from 'path';
 import { URL } from 'url';
 import readline from 'readline';
 import EasyAI from '/usr/local/etc/EasyAI/EasyAI.js';
+import PageRefiner from './._/PageRefiner.js';
+import SmallModel from './._/._/refiners/SmallModel.js';
 
 class YandBox {
     
@@ -13,6 +15,7 @@ class YandBox {
         this.tokenPath = path.join(process.cwd(), 'yandbox-config.json');
         this.logPath = path.join(process.cwd(), 'yandbox-log.json');
         this.versionsPath = path.join(process.cwd(), 'yandbox-versions.json');
+        this.chatHistoryPath = path.join(process.cwd(), 'yandbox-chat-history.json');
         
         const saved = this.loadConfig();
         
@@ -43,6 +46,20 @@ class YandBox {
         this.versions = [];
         this.currentGeneration = null;
         this._originalFetch = null;
+        
+        // Chat history - load last 6 messages
+        this.chatHistory = this.loadChatHistory();
+        
+        // Page generation modes
+        this.generationMode = config.generationMode || saved.generationMode || 'balanced';
+        this.allowedDomains = config.allowedDomains || saved.allowedDomains || [];
+        
+        // Page refiner system
+        if (config.pageRefiner && config.pageRefiner instanceof PageRefiner) {
+            this.pageRefiner = config.pageRefiner;
+        } else {
+            this.pageRefiner = new PageRefiner()
+        }
         
         // Progress tracking state
         this._progressState = {
@@ -99,6 +116,228 @@ class YandBox {
         });
     }
 
+    // ============ CHAT HISTORY METHODS ============
+    
+    loadChatHistory() {
+        try {
+            if (existsSync(this.chatHistoryPath)) {
+                return JSON.parse(readFileSync(this.chatHistoryPath, 'utf8'));
+            }
+        } catch (err) {}
+        return [];
+    }
+
+    saveChatHistory() {
+        // Keep only last 6 messages
+        if (this.chatHistory.length > 6) {
+            this.chatHistory = this.chatHistory.slice(-6);
+        }
+        writeFileSync(this.chatHistoryPath, JSON.stringify(this.chatHistory, null, 2));
+    }
+
+    _truncateText(text, maxTokens) {
+        // Rough estimation: 1 token ≈ 4 characters for English text
+        const maxChars = maxTokens * 4;
+        if (text.length <= maxChars) return text;
+        return text.substring(0, maxChars - 3) + '...';
+    }
+
+    _isFirstGeneration(oldHtml) {
+        // Check if this is the first generation (empty or minimal HTML)
+        if (!oldHtml || oldHtml.trim().length === 0) return true;
+        
+        // Check for the default empty template
+        const stripped = oldHtml.replace(/\s+/g, '').toLowerCase();
+        if (stripped === '<html><body></body></html>') return true;
+        if (stripped === '<html><head></head><body></body></html>') return true;
+        
+        // Check if the HTML is just a loading template (contains "Generating..." title)
+        if (oldHtml.includes('Generating...') && oldHtml.includes('YandBox')) return false;
+        
+        return false;
+    }
+
+    _generateDiffSummary(oldHtml, newHtml, maxTokens) {
+        // For first generation or empty HTML, note it as initial creation
+        if (this._isFirstGeneration(oldHtml)) {
+            return 'Initial page creation - generated complete new HTML page from scratch based on user request';
+        }
+        
+        // For subsequent generations, create a meaningful diff
+        const oldLines = oldHtml.split('\n');
+        const newLines = newHtml.split('\n');
+        const changes = [];
+        
+        // Find added/modified lines
+        const newSet = new Set(newLines.map(l => l.trim()));
+        const oldSet = new Set(oldLines.map(l => l.trim()));
+        
+        // Added lines (in new but not in old)
+        const added = newLines
+            .map(l => l.trim())
+            .filter(line => line && !oldSet.has(line))
+            .slice(0, 10); // Limit to first 10 new lines
+        
+        // Removed lines (in old but not in new)
+        const removed = oldLines
+            .map(l => l.trim())
+            .filter(line => line && !newSet.has(line))
+            .slice(0, 10); // Limit to first 10 removed lines
+        
+        if (added.length > 0) {
+            const addedText = added.join(' | ').substring(0, Math.floor(maxTokens * 2)); // Half for added
+            changes.push(`Added: ${addedText}`);
+        }
+        
+        if (removed.length > 0) {
+            const removedText = removed.join(' | ').substring(0, Math.floor(maxTokens * 2)); // Half for removed
+            changes.push(`Removed: ${removedText}`);
+        }
+        
+        let summary = changes.join(' ');
+        if (!summary) {
+            // If no clear line-level changes, summarize by size/structural changes
+            const sizeDiff = newHtml.length - oldHtml.length;
+            if (Math.abs(sizeDiff) > 100) {
+                const direction = sizeDiff > 0 ? 'expanded' : 'reduced';
+                summary = `Page ${direction} by approximately ${Math.abs(Math.round(sizeDiff / 100) * 100)} characters with structural modifications`;
+            } else {
+                summary = 'Applied refinements and modifications to existing page content';
+            }
+        }
+        
+        return this._truncateText(summary, maxTokens);
+    }
+
+    addToChatHistory(userMessage, oldHtml, newHtml) {
+        const maxTokensPerDiff = 200;
+        const isFirst = this._isFirstGeneration(oldHtml);
+        const diffSummary = this._generateDiffSummary(oldHtml, newHtml, maxTokensPerDiff);
+        
+        this.chatHistory.push({
+            timestamp: new Date().toISOString(),
+            user: userMessage,
+            diff: diffSummary,
+            isFirstGeneration: isFirst
+        });
+        
+        // Keep only last 6
+        if (this.chatHistory.length > 6) {
+            this.chatHistory = this.chatHistory.slice(-6);
+        }
+        
+        this.saveChatHistory();
+    }
+
+    _getChatHistoryContext() {
+        if (this.chatHistory.length === 0) return '';
+        
+        const maxTotalTokens = 1200;
+        const maxTokensPerMessage = 200;
+        let contextParts = [];
+        let totalTokens = 0;
+        
+        // Process from most recent to oldest
+        const recentHistory = [...this.chatHistory].reverse();
+        
+        for (const entry of recentHistory) {
+            if (totalTokens >= maxTotalTokens) break;
+            
+            const userMsg = this._truncateText(entry.user, maxTokensPerMessage);
+            const aiDiff = this._truncateText(entry.diff, maxTokensPerMessage);
+            
+            const userTokens = Math.ceil(userMsg.length / 4);
+            const aiTokens = Math.ceil(aiDiff.length / 4);
+            const entryTokens = userTokens + aiTokens;
+            
+            if (totalTokens + entryTokens <= maxTotalTokens) {
+                contextParts.push({
+                    user: `User request: ${userMsg}`,
+                    ai: `Changes made: ${aiDiff}`
+                });
+                totalTokens += entryTokens;
+            } else {
+                // Try to fit truncated versions
+                const remainingTokens = maxTotalTokens - totalTokens;
+                if (remainingTokens > 40) {
+                    const halfTokens = Math.floor(remainingTokens / 2);
+                    const truncatedUser = this._truncateText(entry.user, halfTokens);
+                    const truncatedDiff = this._truncateText(entry.diff, halfTokens);
+                    contextParts.push({
+                        user: `User request: ${truncatedUser}`,
+                        ai: `Changes: ${truncatedDiff}`
+                    });
+                }
+                break;
+            }
+        }
+        
+        // Reverse to chronological order
+        contextParts.reverse();
+        
+        if (contextParts.length === 0) return '';
+        
+        return `\n\nPREVIOUS CONVERSATION HISTORY (${contextParts.length} interactions):\n${
+            contextParts.map((p, i) => `[${i + 1}] ${p.user}\n    ${p.ai}`).join('\n')
+        }\n\nUse this context to understand the user's evolving requirements. Build upon previous changes rather than starting from scratch. Maintain consistency with the user's established preferences.\n`;
+    }
+
+    clearChatHistory() {
+        this.chatHistory = [];
+        this.saveChatHistory();
+    }
+
+    // ============ EXISTING METHODS (UNCHANGED FUNCTIONALITY) ============
+
+    _getGenerationModeConstraints() {
+        const modeConstraints = {
+            vanilla: `
+EXTERNAL RESOURCES RESTRICTION (VANILLA MODE):
+⚠️ ABSOLUTELY NO EXTERNAL REQUESTS ALLOWED ⚠️
+- NO external CDN links (no Google Fonts, no CDNJS, no unpkg, etc.)
+- NO external images (use inline SVG, CSS gradients, or data URIs only)
+- NO external fonts (use system fonts only: -apple-system, sans-serif, etc.)
+- NO external scripts (all JavaScript must be inline)
+- NO external stylesheets (all CSS must be inline or in <style> tags)
+- NO external API calls or fetch requests
+- ALL resources must be self-contained within the HTML file
+- Use emoji or Unicode characters for icons instead of icon libraries
+- Create CSS art and designs using only CSS/HTML capabilities
+- Implement all functionality with vanilla JavaScript only`,
+            
+            balanced: `
+EXTERNAL RESOURCES GUIDELINES (BALANCED MODE):
+- Minimize external requests for better performance
+- Prefer inline SVG over external images when possible
+- Use system fonts as primary, with one optional web font if needed
+- Keep external dependencies to a minimum
+- Inline critical CSS, defer non-critical styles
+- Use CDN links sparingly and only for essential functionality`,
+            
+            external: `
+EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
+- Free to use external CDN resources and libraries
+- Can reference external images, fonts, and stylesheets
+- May use popular frameworks if beneficial (Tailwind, Bootstrap, etc.)
+- Can include external API calls and third-party services
+- Use any resources that enhance the design and functionality`
+        };
+        
+        return modeConstraints[this.generationMode] || modeConstraints.balanced;
+    }
+
+    _getDomainRestrictions() {
+        if (this.generationMode === 'vanilla') {
+            return '\n⚠️ ZERO EXTERNAL REQUESTS - All content must be self-contained\n';
+        }
+        
+        if (this.allowedDomains.length > 0) {
+            return `\nALLOWED EXTERNAL DOMAINS: ${this.allowedDomains.join(', ')}\nOnly these domains are permitted for external resources.\n`;
+        }
+        
+        return '';
+    }
+
     _applyActiveConfig() {
         const cfg = this.configs[this.activeConfigName] || {};
         this.provider = cfg.provider || null;
@@ -123,7 +362,9 @@ class YandBox {
             configs: this.configs,
             activeConfig: this.activeConfigName,
             totalCost: this.totalCost,
-            requests: this.requests.slice(-50)
+            requests: this.requests.slice(-50),
+            generationMode: this.generationMode,
+            allowedDomains: this.allowedDomains
         });
     }
 
@@ -157,7 +398,7 @@ class YandBox {
     startHUD() {
         const updateHUD = () => {
             console.clear();
-            const w = 50;
+            const w = 55;
             const top = '╔' + '═'.repeat(w - 2) + '╗';
             const mid = '╠' + '═'.repeat(w - 2) + '╣';
             const bot = '╚' + '═'.repeat(w - 2) + '╝';
@@ -177,11 +418,16 @@ class YandBox {
                 modelDisplay = '\x1b[32m' + (modelStr.length > 30 ? modelStr.substring(0, 27) + '...' : modelStr) + '\x1b[0m';
             }
             
+            const modeColors = { vanilla: '\x1b[32m', balanced: '\x1b[33m', external: '\x1b[31m' };
+            const modeColor = modeColors[this.generationMode] || '\x1b[37m';
+            
             const lines = [
                 ['Provider', providerDisplay],
                 ['Model', modelDisplay],
+                ['Mode', modeColor + this.generationMode.toUpperCase() + '\x1b[0m'],
                 ['Port', '\x1b[34m' + this.port + '\x1b[0m'],
                 ['Requests', '\x1b[35m' + this.requestCount + '\x1b[0m'],
+                ['Chat History', '\x1b[36m' + this.chatHistory.length + '/6 msgs\x1b[0m'],
                 ['Session Cost', '\x1b[31m$' + this.sessionCost.toFixed(8) + '\x1b[0m'],
                 ['Total Cost', '\x1b[31m$' + this.totalCost.toFixed(8) + '\x1b[0m'],
                 ['Generation', this.currentGeneration ? '\x1b[33mACTIVE\x1b[0m' : '\x1b[90midle\x1b[0m']
@@ -278,6 +524,58 @@ class YandBox {
                 this.cancelGeneration();
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true }));
+                return;
+            }
+
+            // Clear chat history endpoint
+            if (pathname === '/api/clear-history' && req.method === 'POST') {
+                this.clearChatHistory();
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, message: 'Chat history cleared' }));
+                return;
+            }
+
+            // Get chat history endpoint
+            if (pathname === '/api/chat-history' && req.method === 'GET') {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ 
+                    history: this.chatHistory,
+                    count: this.chatHistory.length,
+                    maxMessages: 6
+                }));
+                return;
+            }
+
+            // Mode management endpoints
+            if (pathname === '/api/mode' && req.method === 'GET') {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ 
+                    mode: this.generationMode,
+                    allowedDomains: this.allowedDomains 
+                }));
+                return;
+            }
+
+            if (pathname === '/api/mode' && req.method === 'POST') {
+                let body = '';
+                req.on('data', chunk => body += chunk);
+                req.on('end', () => {
+                    try {
+                        const { mode, domains } = JSON.parse(body);
+                        if (mode && ['vanilla', 'balanced', 'external'].includes(mode)) {
+                            this.generationMode = mode;
+                        }
+                        if (domains && Array.isArray(domains)) {
+                            this.allowedDomains = domains;
+                        }
+                        this.saveConfig();
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: true, mode: this.generationMode }));
+                    } catch (err) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: err.message }));
+                    }
+                });
                 return;
             }
 
@@ -423,65 +721,37 @@ class YandBox {
         }
     }
 
-    /**
-     * Calculate progress percentage using a fluid, non-stuck algorithm
-     * Uses weighted combination of multiple signals for maximum accuracy
-     * @param {number} generatedLength - Current length of generated buffer
-     * @param {number} estimatedTotal - Estimated total output length
-     * @param {Object} structure - HTML structure markers { tags, closingTags }
-     * @param {number} elapsedSeconds - Time elapsed since generation started
-     * @param {number} tokenCount - Number of tokens received so far
-     * @returns {number} Progress percentage (0-95)
-     */
     _calculateProgress(generatedLength, estimatedTotal, structure, elapsedSeconds, tokenCount) {
-        // Factor 1: Character-based progress (weight: 70%)
-        // Uses logarithmic scaling to avoid plateau at the end
         let charRatio = Math.min(1, generatedLength / Math.max(estimatedTotal, 1));
-        // Apply smooth logarithmic curve to prevent getting stuck at high percentages
         let charProgress = 70 * (Math.log(1 + 9 * charRatio) / Math.log(10));
         
-        // Factor 2: Structure-based progress (weight: 15%)
-        // Tracks HTML tag completeness more aggressively
         let structureProgress = 0;
         if (structure.tags > 0) {
             const closingRatio = Math.min(1, structure.closingTags / Math.max(structure.tags, 1));
-            // Apply easing: slow start, faster middle, slow end
             structureProgress = 15 * (closingRatio < 0.5 
                 ? 2 * closingRatio * closingRatio 
                 : -1 + (4 - 2 * closingRatio) * closingRatio);
         }
         
-        // Factor 3: Time-based progress (weight: 10%)
-        // Adaptive time factor that accelerates initially and decelerates later
         let timeProgress;
         if (elapsedSeconds < 3) {
-            timeProgress = 10 * (elapsedSeconds / 3) * 0.5; // Slow ramp up
+            timeProgress = 10 * (elapsedSeconds / 3) * 0.5;
         } else if (elapsedSeconds < 15) {
-            timeProgress = 5 + 5 * ((elapsedSeconds - 3) / 12); // Linear middle
+            timeProgress = 5 + 5 * ((elapsedSeconds - 3) / 12);
         } else {
-            timeProgress = 10 * (1 - Math.exp(-elapsedSeconds / 30)); // Gradual approach to 10
+            timeProgress = 10 * (1 - Math.exp(-elapsedSeconds / 30));
         }
         
-        // Factor 4: Token velocity (weight: 5%)
-        // Rewards steady token generation
         const tokensPerSecond = elapsedSeconds > 0 ? tokenCount / elapsedSeconds : 0;
         const velocityProgress = Math.min(5, tokensPerSecond * 0.5);
         
-        // Combine all factors, cap at 95% (reserve last 5% for completion)
         return Math.min(95, Math.max(0, Math.round(charProgress + structureProgress + timeProgress + velocityProgress)));
     }
 
-    /**
-     * Send progress update with adaptive rate limiting
-     * Updates document title for tab visibility
-     * @param {number} percent - Progress percentage to broadcast
-     * @param {boolean} force - Force send regardless of rate limit
-     */
     _sendProgress(percent, force = false) {
         const now = Date.now();
         const state = this._progressState;
         
-        // Adaptive rate limiting: faster updates at lower percentages, slower at higher
         const minInterval = percent < 30 ? 100 : (percent < 60 ? 200 : (percent < 90 ? 300 : 150));
         const percentChanged = percent !== state.lastPercent;
         
@@ -489,7 +759,6 @@ class YandBox {
             state.lastPercent = percent;
             state.lastUpdateTime = now;
             
-            // Broadcast progress to SSE clients
             this.broadcastSSE({ 
                 type: 'progress', 
                 percent: percent,
@@ -498,9 +767,6 @@ class YandBox {
         }
     }
 
-    /**
-     * Reset progress tracking state
-     */
     _resetProgress() {
         this._progressState = {
             lastPercent: 0,
@@ -518,11 +784,14 @@ class YandBox {
   .container { text-align: center; max-width: 400px; width: 90%; }
   .progress-bar { width: 100%; height: 8px; background: #333; border-radius: 4px; overflow: hidden; margin: 20px 0; }
   .progress-fill { height: 100%; width: ${progressPercent}%; background: linear-gradient(90deg, #0af, #0ff); transition: width 0.2s ease; }
-  .actions { display: flex; gap: 10px; justify-content: center; margin-top: 15px; }
+  .actions { display: flex; gap: 10px; justify-content: center; margin-top: 15px; flex-wrap: wrap; }
   button, select { background: #2a2a2a; border: 1px solid #444; color: #ddd; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 14px; }
   button:hover { background: #3a3a3a; }
   select { min-width: 200px; }
   .status { font-size: 13px; color: #aaa; margin-top: 8px; min-height: 20px; }
+  .mode-toggle { margin-top: 10px; }
+  .mode-btn { font-size: 12px; padding: 4px 8px; }
+  .mode-btn.active { background: #0af; color: #000; }
 </style>
 </head>
 <body>
@@ -534,6 +803,11 @@ class YandBox {
     <button id="cancelBtn">✕ Cancel</button>
     <select id="versionSelect"><option value="">← Previous versions</option></select>
   </div>
+  <div class="mode-toggle">
+    <button class="mode-btn" data-mode="vanilla">🍦 Vanilla</button>
+    <button class="mode-btn active" data-mode="balanced">⚖️ Balanced</button>
+    <button class="mode-btn" data-mode="external">🌐 External</button>
+  </div>
 </div>
 <script>
   (function() {
@@ -541,10 +815,39 @@ class YandBox {
     const status = document.getElementById('status');
     const cancelBtn = document.getElementById('cancelBtn');
     const versionSelect = document.getElementById('versionSelect');
+    const modeBtns = document.querySelectorAll('.mode-btn');
     let eventSource = null;
     let progressReceived = false;
+    let currentMode = 'balanced';
     
-    // Fetch previous versions
+    fetch('/api/mode')
+      .then(r => r.json())
+      .then(data => {
+        currentMode = data.mode || 'balanced';
+        updateModeButtons();
+      })
+      .catch(() => {});
+    
+    function updateModeButtons() {
+      modeBtns.forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === currentMode);
+      });
+    }
+    
+    modeBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.mode;
+        fetch('/api/mode', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ mode })
+        }).then(r => r.json()).then(data => {
+          currentMode = data.mode;
+          updateModeButtons();
+        }).catch(() => {});
+      });
+    });
+    
     fetch('/api/versions')
       .then(r => r.json())
       .then(versions => {
@@ -592,7 +895,6 @@ class YandBox {
             const p = data.percent || 0;
             fill.style.width = p + '%';
             status.textContent = p + '% Complete';
-            // Update document title for tab visibility
             if (data.title) {
               document.title = data.title;
             }
@@ -683,7 +985,6 @@ class YandBox {
             currentHtml = '<html><body></body></html>';
         }
         
-        // Estimate output length based on input size with adaptive scaling
         const estimatedOutputLength = Math.max(currentHtml.length * 1.5, 800);
 
         const abortController = new AbortController();
@@ -694,14 +995,12 @@ class YandBox {
             message
         };
 
-        // Reset progress state for new generation
         this._resetProgress();
         this._progressState.isActive = true;
 
         const loadingHtml = this.getLoadingTemplate(0);
         this.broadcastSSE({ type: 'update-html', html: loadingHtml });
         
-        // Send initial progress explicitly
         this._sendProgress(0, true);
 
         const originalFetch = globalThis.fetch;
@@ -713,6 +1012,16 @@ class YandBox {
         };
 
         try {
+            const modeConstraints = this._getGenerationModeConstraints();
+            const domainRestrictions = this._getDomainRestrictions();
+            const refinerPrompt = await this.pageRefiner.GetPrompt({ 
+                mode: this.generationMode,
+                domains: this.allowedDomains 
+            });
+            
+            // Get chat history context
+            const chatHistoryContext = this._getChatHistoryContext();
+            
             const systemPrompt = `You are an expert web developer. The user wants to modify the HTML page. Provide the complete new HTML code.
 
 CRITICAL SCROLLING REQUIREMENT - READ THIS FIRST:
@@ -723,14 +1032,18 @@ CRITICAL SCROLLING REQUIREMENT - READ THIS FIRST:
 - NEVER set "height: 100vh" with "overflow: hidden" on the body
 - NEVER lock the viewport or prevent scrolling
 - Ensure content is longer than viewport to enable natural scrolling
-- If using fixed sections, make sure there's scrollable content below
 - Add enough content, padding, and margins to ensure the page exceeds viewport height
 - Use CSS "overflow-y: scroll" instead of "overflow: hidden" for containers that need scroll
 - The page MUST have a visible scrollbar and respond to mouse wheel scrolling
 - Add padding-bottom: 2rem or more to body to ensure scrollability
-- If the design seems compact, add extra sections or increase content to force scrolling
 
-Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTML is valid, complete with DOCTYPE, and includes all necessary tags. The page MUST be scrollable with mouse and scrollbar.`;
+${modeConstraints}
+${domainRestrictions}
+
+DESIGN AND LOGICAL INSTRUCT REFINEMENTS:
+${refinerPrompt}
+${chatHistoryContext}
+Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTML is valid, complete with DOCTYPE, and includes all necessary tags.`;
 
             const userPrompt = `Current HTML:\n${currentHtml}\n\nUser request: ${message}\n\nREMEMBER: The page must be scrollable. DO NOT lock scrolling. Include overflow-y: auto on html/body. Provide complete new HTML:`;
             
@@ -743,7 +1056,6 @@ Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTM
             let tokenCount = 0;
             const generationStartTime = Date.now();
             
-            // Track HTML structure for more accurate progress
             const htmlStructure = {
                 tags: 0,
                 closingTags: 0
@@ -754,7 +1066,6 @@ Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTM
                 tokenCallback: (data) => {
                     let token = null;
                     
-                    // Handle various response formats from different providers
                     if (data.stream?.content) {
                         token = data.stream.content;
                     } else if (data.content) {
@@ -771,7 +1082,6 @@ Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTM
                         generatedBuffer += token;
                         tokenCount++;
                         
-                        // Track HTML structure for progress estimation
                         if (token.includes('<') && !token.includes('</')) htmlStructure.tags++;
                         if (token.includes('</')) htmlStructure.closingTags++;
                         if (token.includes('/>')) {
@@ -779,7 +1089,6 @@ Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTM
                             htmlStructure.closingTags++;
                         }
                         
-                        // Calculate progress with improved algorithm
                         const elapsedSeconds = (Date.now() - generationStartTime) / 1000;
                         const percent = this._calculateProgress(
                             generatedBuffer.length, 
@@ -794,17 +1103,14 @@ Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTM
                 }
             };
 
-            // Set provider flags
             if (this.provider === 'deepseek') {
                 chatConfig.deepseek = true;
             } else if (this.provider === 'deepinfra') {
                 chatConfig.deepinfra = true;
             }
-            // Local provider: no flag needed, EasyAI routes via server_url
 
             const result = await this.AI.Chat(messages, chatConfig);
 
-            // If streaming didn't capture content, extract from result
             if (!generatedBuffer && result) {
                 if (result.full_text) {
                     generatedBuffer = result.full_text;
@@ -815,7 +1121,6 @@ Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTM
                 }
             }
 
-            // Send 100% progress with completion title
             this._sendProgress(100, true);
             this.broadcastSSE({ 
                 type: 'progress', 
@@ -823,13 +1128,10 @@ Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTM
                 title: '✓ Complete - YandBox'
             });
             
-            // Small delay for visual completion effect
             await new Promise(resolve => setTimeout(resolve, 150));
 
-            // Clean and extract HTML
             let finalHtml = (generatedBuffer || '').trim();
             
-            // Remove markdown code fences
             finalHtml = finalHtml.replace(/^```html\s*\n?/i, '');
             finalHtml = finalHtml.replace(/\n?```\s*$/i, '');
             finalHtml = finalHtml.replace(/^```\s*\n?/i, '');
@@ -839,9 +1141,7 @@ Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTM
                 throw new Error('Generated content is empty or too short');
             }
 
-            // Ensure scrollability in generated HTML if missing
             if (!finalHtml.includes('overflow-y') && !finalHtml.includes('overflow-y:')) {
-                // Inject scroll-enabling CSS into the <head> if it exists
                 const scrollCSS = '<style>html{overflow-y:auto!important;height:auto!important}body{overflow-y:auto!important;min-height:100vh!important;padding-bottom:2rem}</style>';
                 if (finalHtml.includes('</head>')) {
                     finalHtml = finalHtml.replace('</head>', scrollCSS + '</head>');
@@ -852,10 +1152,11 @@ Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTM
                 }
             }
 
-            // Save the new main.html
             writeFileSync('./main.html', finalHtml, 'utf8');
 
-            // Add version to history
+            // Add to chat history
+            this.addToChatHistory(message, currentHtml, finalHtml);
+
             this.versions.push({
                 timestamp: new Date().toLocaleString(),
                 request: message,
@@ -863,34 +1164,27 @@ Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTM
             });
             this.saveVersions();
 
-            // Broadcast final update
             this.broadcastSSE({ type: 'update-html', html: finalHtml });
 
-            // Send success to chat
             if (!chatRes.writableEnded) {
                 chatRes.write(`data: ${JSON.stringify({ type: 'token', token: '✅ Page updated successfully!' })}\n\n`);
                 chatRes.write('data: {"type":"end"}\n\n');
                 chatRes.end();
             }
 
-            // Update request stats
             this.requestCount++;
             
-            // Cost calculation using result.metadata
             if (result.metadata?.usage) {
                 const usage = result.metadata.usage;
                 const tokens = (usage.prompt_tokens || 0) + (usage.completion_tokens || 0);
                 let cost = 0;
                 
-                // Use estimated_cost if available (works for all providers)
                 if (usage.estimated_cost !== undefined && usage.estimated_cost !== null) {
                     cost = usage.estimated_cost;
                 }
-                // Fallback for DeepSeek
                 else if (this.provider === 'deepseek' && this.AI.DeepSeek) {
                     cost = this.AI.DeepSeek._calculateCost(this.model, usage);
                 }
-                // Fallback for DeepInfra
                 else if (this.provider === 'deepinfra' && this.AI.DeepInfra) {
                     cost = this.AI.DeepInfra._calculateCost(this.model, usage);
                 }
@@ -906,7 +1200,6 @@ Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTM
                     });
                 }
             } else if (this.provider === 'local') {
-                // Local provider - no cost
                 this.requests.push({
                     model: this.model || 'local-model',
                     cost: 0,
@@ -1042,7 +1335,6 @@ async function manageKeys() {
     const tokenPath = path.join(process.cwd(), 'yandbox-config.json');
     let saved = existsSync(tokenPath) ? JSON.parse(readFileSync(tokenPath, 'utf8')) : {};
     
-    // Migrate old format
     if (!saved.configs && saved.keys) {
         saved.configs = {};
         for (const name in saved.keys) {
@@ -1190,9 +1482,9 @@ async function manageKeys() {
         if (configs[name.trim()]) {
             saved.activeConfig = name.trim();
             writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
-            console.log('\x1b[32m✓ Active configuration: ' + name.trim() + '\x1b[0m');
+            console.log('\n\x1b[32m✓ Active configuration: ' + name.trim() + '\x1b[0m');
         } else {
-            console.log('\x1b[31m✗ Configuration not found\x1b[0m');
+            console.log('\n\x1b[31m✗ Configuration not found\x1b[0m');
         }
         return true;
         
@@ -1210,7 +1502,7 @@ async function manageKeys() {
         
         saved.configs = configs;
         writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
-        console.log('\x1b[32m✓ Model updated!\x1b[0m');
+        console.log('\n\x1b[32m✓ Model updated!\x1b[0m');
         return true;
         
     } else if (action === 'd' && configNames.length > 0) {
@@ -1222,9 +1514,9 @@ async function manageKeys() {
                 saved.activeConfig = Object.keys(configs)[0] || null;
             }
             writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
-            console.log('\x1b[32m✓ Configuration deleted!\x1b[0m');
+            console.log('\n\x1b[32m✓ Configuration deleted!\x1b[0m');
         } else {
-            console.log('\x1b[31m✗ Configuration not found\x1b[0m');
+            console.log('\n\x1b[31m✗ Configuration not found\x1b[0m');
         }
         return true;
         
@@ -1241,7 +1533,6 @@ async function parseArgs() {
     const tokenPath = path.join(process.cwd(), 'yandbox-config.json');
     let saved = existsSync(tokenPath) ? JSON.parse(readFileSync(tokenPath, 'utf8')) : {};
     
-    // Migrate old format
     if (!saved.configs && saved.keys) {
         saved.configs = {};
         for (const name in saved.keys) {
@@ -1260,7 +1551,6 @@ async function parseArgs() {
         writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
     }
     
-    // Handle 'new' command
     if (args.includes('new')) {
         console.log('\x1b[33m🆕 Starting fresh with new HTML pages...\x1b[0m\n');
         
@@ -1289,12 +1579,11 @@ async function parseArgs() {
         process.exit(0);
     }
     
-    // Handle 'reset' command
     if (args.includes('reset')) {
         console.log('\x1b[33m🔄 Resetting YandBox...\x1b[0m\n');
         
         const filesToRemove = ['index.html', 'chat.html', 'main.html'];
-        const jsonFiles = ['yandbox-config.json', 'yandbox-log.json', 'yandbox-versions.json'];
+        const jsonFiles = ['yandbox-config.json', 'yandbox-log.json', 'yandbox-versions.json', 'yandbox-chat-history.json'];
         let removed = 0;
         
         for (const file of [...filesToRemove, ...jsonFiles]) {
@@ -1319,7 +1608,6 @@ async function parseArgs() {
         process.exit(0);
     }
     
-    // Handle 'keys' or 'models' command
     if (args.includes('keys') || args.includes('models')) {
         await manageKeys();
         saved = existsSync(tokenPath) ? JSON.parse(readFileSync(tokenPath, 'utf8')) : {};
@@ -1329,30 +1617,36 @@ async function parseArgs() {
         process.exit(0);
     }
     
-    // Handle --clear flag
     if (args.includes('--clear')) {
         writeFileSync(tokenPath, JSON.stringify({ 
             configs: saved.configs || {}, 
             activeConfig: saved.activeConfig || null,
-            totalCost: saved.totalCost || 0
+            totalCost: saved.totalCost || 0,
+            generationMode: saved.generationMode || 'balanced',
+            allowedDomains: saved.allowedDomains || []
         }, null, 2));
         console.log('\x1b[32m✓ Logs cleared (configurations preserved)\x1b[0m');
         process.exit(0);
     }
 
-    // Parse port argument
     for (const arg of args) {
         if (arg.startsWith('--port=')) {
             config.port = parseInt(arg.split('=')[1]);
         }
+        if (arg.startsWith('--mode=')) {
+            const mode = arg.split('=')[1];
+            if (['vanilla', 'balanced', 'external'].includes(mode)) {
+                saved.generationMode = mode;
+                writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
+                console.log(`\n\x1b[32m✓ Generation mode set to: ${mode}\x1b[0m\n`);
+            }
+        }
     }
 
-    // Handle config name or token argument
     for (const arg of args) {
         if (!arg.startsWith('--')) {
             const configs = saved.configs || {};
             
-            // Check if it's a saved configuration name
             if (configs[arg]) {
                 saved.activeConfig = arg;
                 writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
@@ -1360,7 +1654,6 @@ async function parseArgs() {
                 return config;
             }
             
-            // Treat as API token (backward compatibility)
             const provider = arg.startsWith('sk-') ? 'deepseek' : 'deepinfra';
             const defaultModel = provider === 'deepseek' ? 'deepseek-v4-flash' : 'meta-llama/Meta-Llama-3.1-8B-Instruct';
             
@@ -1383,7 +1676,6 @@ async function parseArgs() {
         }
     }
 
-    // No configuration found - interactive setup
     if (!saved.activeConfig || !saved.configs?.[saved.activeConfig]) {
         console.log('\x1b[33mNo API configuration found.\x1b[0m\n');
         console.log('\x1b[36mChoose provider type:\x1b[0m');
