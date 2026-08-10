@@ -1432,9 +1432,11 @@ async function manageKeys() {
         } else if (provChoice === '3') {
             provider = 'local';
             console.log('\n\x1b[36mEnter EasyAI server URL:\x1b[0m');
-            console.log('\x1b[90mExamples: http://localhost, http://192.168.1.100\x1b[0m');
+            console.log('\x1b[90mExamples: localhost, http://192.168.1.100\x1b[0m');
             serverUrl = (await question('\x1b[90m> \x1b[0m')).trim();
-            if (!serverUrl) return false;
+            if (!serverUrl) {
+                serverUrl = 'localhost';
+            }
             
             console.log('\n\x1b[36mPort (Enter for default 4000):\x1b[0m');
             const portStr = (await question('\x1b[90m> \x1b[0m')).trim();
@@ -1710,11 +1712,10 @@ async function parseArgs() {
         } else if (choice === '3') {
             provider = 'local';
             console.log('\n\x1b[36mEnter EasyAI server URL:\x1b[0m');
-            console.log('\x1b[90mExample: http://localhost\x1b[0m');
+            console.log('\x1b[90mExample: localhost\x1b[0m');
             serverUrl = (await question('\x1b[90m> \x1b[0m')).trim();
             if (!serverUrl) {
-                console.log('\x1b[31mNo URL provided. Exiting.\x1b[0m');
-                process.exit(0);
+                serverUrl = 'localhost';
             }
             
             console.log('\n\x1b[36mPort (Enter for default 4000):\x1b[0m');
