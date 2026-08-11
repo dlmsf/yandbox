@@ -3,6 +3,7 @@
   "type": "module",
   "scripts": {
     "yandbox" : "node YandBox.js",
+    "clear" : "node YandBox.js reset",
     "reset" : "node YandBox.js reset",
     "new" : "node YandBox.js new"
 

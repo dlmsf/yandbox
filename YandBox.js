@@ -16,6 +16,7 @@ class YandBox {
         this.logPath = path.join(process.cwd(), 'yandbox-log.json');
         this.versionsPath = path.join(process.cwd(), 'yandbox-versions.json');
         this.chatHistoryPath = path.join(process.cwd(), 'yandbox-chat-history.json');
+        this.generationStatePath = path.join(process.cwd(), 'yandbox-generation-state.json');
         
         const saved = this.loadConfig();
         
@@ -106,10 +107,30 @@ class YandBox {
         
         this.sseClients = new Set();
         this.requestCount = 0;
+        
+        // Start SSE heartbeat to clean stale connections and prevent memory leaks
+        this._sseHeartbeat = setInterval(() => {
+            const deadClients = new Set();
+            this.sseClients.forEach(client => {
+                if (client.writableEnded || client.destroyed) {
+                    deadClients.add(client);
+                    return;
+                }
+                try {
+                    client.write(': heartbeat\n\n');
+                } catch (error) {
+                    deadClients.add(client);
+                }
+            });
+            deadClients.forEach(client => this.sseClients.delete(client));
+        }, 30000);
+        
         this.startHUD();
         
         this.ensureBaseFiles().then(() => {
             this.initServer();
+            // Recover any interrupted generation from previous crash
+            this._recoverGenerationIfNeeded();
         }).catch(err => {
             console.error('Failed to initialize YandBox:', err);
             process.exit(1);
@@ -287,7 +308,7 @@ class YandBox {
         this.saveChatHistory();
     }
 
-    // ============ EXISTING METHODS (UNCHANGED FUNCTIONALITY) ============
+    // ============ GENERATION MODES AND RESTRICTIONS ============
 
     _getGenerationModeConstraints() {
         const modeConstraints = {
@@ -678,9 +699,21 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
 
     broadcastSSE(data) {
         const message = `data: ${JSON.stringify(data)}\n\n`;
+        const deadClients = new Set();
+        
         this.sseClients.forEach(client => {
-            client.write(message);
+            if (client.writableEnded || client.destroyed) {
+                deadClients.add(client);
+                return;
+            }
+            try {
+                client.write(message);
+            } catch (error) {
+                deadClients.add(client);
+            }
         });
+        
+        deadClients.forEach(client => this.sseClients.delete(client));
     }
 
     async handleTestConnection(req, res) {
@@ -977,16 +1010,72 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
         this.broadcastSSE({ type: 'update-html', html: versionHtml });
     }
 
-    async startGeneration(message, chatRes) {
+    // ============ ACID GENERATION STATE MANAGEMENT ============
+    
+    _saveGenerationState(message, currentHtml) {
+        try {
+            const state = {
+                message: message,
+                currentHtml: currentHtml,
+                timestamp: Date.now()
+            };
+            writeFileSync(this.generationStatePath, JSON.stringify(state, null, 2));
+        } catch (error) {
+            console.error('Failed to save generation state:', error);
+        }
+    }
+
+    _clearGenerationState() {
+        try {
+            if (existsSync(this.generationStatePath)) {
+                unlinkSync(this.generationStatePath);
+            }
+        } catch (error) {
+            // Silently ignore cleanup errors
+        }
+    }
+
+    _recoverGenerationIfNeeded() {
+        if (!existsSync(this.generationStatePath)) {
+            return;
+        }
+        
+        try {
+            const state = JSON.parse(readFileSync(this.generationStatePath, 'utf8'));
+            
+            // Only recover if there's a valid message and no active generation
+            if (state.message && state.currentHtml && !this.currentGeneration) {
+                console.log('Recovering interrupted generation for message:', state.message.substring(0, 50) + '...');
+                // Note: We start generation without a chatRes, so the client will need to reconnect
+                // to the SSE stream to see the tokens
+                this.startGeneration(state.message, null, true);
+            } else {
+                // Stale state file, clean it up
+                this._clearGenerationState();
+            }
+        } catch (error) {
+            console.error('Failed to recover generation state:', error);
+            this._clearGenerationState();
+        }
+    }
+
+    // ============ MAIN GENERATION METHOD WITH RETRY AND ACID PROTECTION ============
+
+    async startGeneration(message, chatRes, isRecovery = false) {
         let currentHtml;
         try {
             currentHtml = readFileSync('./main.html', 'utf8');
-        } catch (err) {
+        } catch (error) {
             currentHtml = '<html><body></body></html>';
         }
         
+        // Save state for crash recovery (only on first attempt, not during recovery)
+        if (!isRecovery) {
+            this._saveGenerationState(message, currentHtml);
+        }
+        
         const estimatedOutputLength = Math.max(currentHtml.length * 1.5, 800);
-
+    
         const abortController = new AbortController();
         this.currentGeneration = {
             abortController,
@@ -994,15 +1083,15 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
             chatRes,
             message
         };
-
+    
         this._resetProgress();
         this._progressState.isActive = true;
-
+    
         const loadingHtml = this.getLoadingTemplate(0);
         this.broadcastSSE({ type: 'update-html', html: loadingHtml });
         
         this._sendProgress(0, true);
-
+    
         const originalFetch = globalThis.fetch;
         this._originalFetch = originalFetch;
         globalThis.fetch = (url, options) => {
@@ -1010,48 +1099,28 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
             options.signal = abortController.signal;
             return originalFetch(url, options);
         };
-
-        try {
-            const modeConstraints = this._getGenerationModeConstraints();
-            const domainRestrictions = this._getDomainRestrictions();
-            const refinerPrompt = await this.pageRefiner.GetPrompt({ 
-                mode: this.generationMode,
-                domains: this.allowedDomains 
-            });
+    
+        // Retry configuration
+        const MAX_RETRIES = 3;
+        let attempt = 0;
+        let lastError = null;
+        let finalHtml = '';
+        let success = false;
+        
+        // Track costs separately for retry attempts
+        let retryCosts = 0;
+        // Store the successful result for cost tracking
+        let successfulResult = null;
+    
+        while (attempt < MAX_RETRIES && !success) {
+            attempt++;
             
-            // Get chat history context
-            const chatHistoryContext = this._getChatHistoryContext();
+            if (attempt > 1) {
+                console.log(`Retry attempt ${attempt}/${MAX_RETRIES}...`);
+                // Wait before retry
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
             
-            const systemPrompt = `You are an expert web developer. The user wants to modify the HTML page. Provide the complete new HTML code.
-
-CRITICAL SCROLLING REQUIREMENT - READ THIS FIRST:
-⚠️ THE PAGE MUST BE SCROLLABLE WITH MOUSE WHEEL AND SCROLLBAR ⚠️
-- Set html { overflow-y: auto !important; height: auto !important; }
-- Set body { overflow-y: auto !important; min-height: 100vh !important; }
-- NEVER use "overflow: hidden" on html or body
-- NEVER set "height: 100vh" with "overflow: hidden" on the body
-- NEVER lock the viewport or prevent scrolling
-- Ensure content is longer than viewport to enable natural scrolling
-- Add enough content, padding, and margins to ensure the page exceeds viewport height
-- Use CSS "overflow-y: scroll" instead of "overflow: hidden" for containers that need scroll
-- The page MUST have a visible scrollbar and respond to mouse wheel scrolling
-- Add padding-bottom: 2rem or more to body to ensure scrollability
-
-${modeConstraints}
-${domainRestrictions}
-
-DESIGN AND LOGICAL INSTRUCT REFINEMENTS:
-${refinerPrompt}
-${chatHistoryContext}
-Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTML is valid, complete with DOCTYPE, and includes all necessary tags.`;
-
-            const userPrompt = `Current HTML:\n${currentHtml}\n\nUser request: ${message}\n\nREMEMBER: The page must be scrollable. DO NOT lock scrolling. Include overflow-y: auto on html/body. Provide complete new HTML:`;
-            
-            const messages = [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userPrompt }
-            ];
-
             let generatedBuffer = '';
             let tokenCount = 0;
             const generationStartTime = Date.now();
@@ -1060,122 +1129,192 @@ Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTM
                 tags: 0,
                 closingTags: 0
             };
-
-            const chatConfig = {
-                stream: true,
-                tokenCallback: (data) => {
-                    let token = null;
-                    
-                    if (data.stream?.content) {
-                        token = data.stream.content;
-                    } else if (data.content) {
-                        token = data.content;
-                    } else if (data.choices?.[0]?.delta?.content) {
-                        token = data.choices[0].delta.content;
-                    } else if (data.choices?.[0]?.text) {
-                        token = data.choices[0].text;
-                    } else if (typeof data === 'string') {
-                        token = data;
-                    }
-                    
-                    if (token) {
-                        generatedBuffer += token;
-                        tokenCount++;
+    
+            try {
+                const modeConstraints = this._getGenerationModeConstraints();
+                const domainRestrictions = this._getDomainRestrictions();
+                const refinerPrompt = await this.pageRefiner.GetPrompt({ 
+                    mode: this.generationMode,
+                    domains: this.allowedDomains 
+                });
+                
+                // Get chat history context
+                const chatHistoryContext = this._getChatHistoryContext();
+                
+                const systemPrompt = `You are an expert web developer. The user wants to modify the HTML page. Provide the complete new HTML code.
+    
+    CRITICAL SCROLLING REQUIREMENT - READ THIS FIRST:
+    ⚠️ THE PAGE MUST BE SCROLLABLE WITH MOUSE WHEEL AND SCROLLBAR ⚠️
+    - Set html { overflow-y: auto !important; height: auto !important; }
+    - Set body { overflow-y: auto !important; min-height: 100vh !important; }
+    - NEVER use "overflow: hidden" on html or body
+    - NEVER set "height: 100vh" with "overflow: hidden" on the body
+    - NEVER lock the viewport or prevent scrolling
+    - Ensure content is longer than viewport to enable natural scrolling
+    - Add enough content, padding, and margins to ensure the page exceeds viewport height
+    - Use CSS "overflow-y: scroll" instead of "overflow: hidden" for containers that need scroll
+    - The page MUST have a visible scrollbar and respond to mouse wheel scrolling
+    - Add padding-bottom: 2rem or more to body to ensure scrollability
+    
+    ${modeConstraints}
+    ${domainRestrictions}
+    
+    DESIGN AND LOGICAL INSTRUCT REFINEMENTS:
+    ${refinerPrompt}
+    ${chatHistoryContext}
+    Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTML is valid, complete with DOCTYPE, and includes all necessary tags.`;
+    
+                const userPrompt = `Current HTML:\n${currentHtml}\n\nUser request: ${message}\n\nREMEMBER: The page must be scrollable. DO NOT lock scrolling. Include overflow-y: auto on html/body. Provide complete new HTML:`;
+                
+                const messages = [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                ];
+    
+                const chatConfig = {
+                    stream: true,
+                    tokenCallback: (data) => {
+                        let token = null;
                         
-                        if (token.includes('<') && !token.includes('</')) htmlStructure.tags++;
-                        if (token.includes('</')) htmlStructure.closingTags++;
-                        if (token.includes('/>')) {
-                            htmlStructure.tags++;
-                            htmlStructure.closingTags++;
+                        if (data.stream?.content) {
+                            token = data.stream.content;
+                        } else if (data.content) {
+                            token = data.content;
+                        } else if (data.choices?.[0]?.delta?.content) {
+                            token = data.choices[0].delta.content;
+                        } else if (data.choices?.[0]?.text) {
+                            token = data.choices[0].text;
+                        } else if (typeof data === 'string') {
+                            token = data;
                         }
                         
-                        const elapsedSeconds = (Date.now() - generationStartTime) / 1000;
-                        const percent = this._calculateProgress(
-                            generatedBuffer.length, 
-                            estimatedOutputLength, 
-                            htmlStructure, 
-                            elapsedSeconds,
-                            tokenCount
-                        );
-                        
-                        this._sendProgress(percent);
+                        if (token) {
+                            generatedBuffer += token;
+                            tokenCount++;
+                            
+                            if (token.includes('<') && !token.includes('</')) htmlStructure.tags++;
+                            if (token.includes('</')) htmlStructure.closingTags++;
+                            if (token.includes('/>')) {
+                                htmlStructure.tags++;
+                                htmlStructure.closingTags++;
+                            }
+                            
+                            const elapsedSeconds = (Date.now() - generationStartTime) / 1000;
+                            const percent = this._calculateProgress(
+                                generatedBuffer.length, 
+                                estimatedOutputLength, 
+                                htmlStructure, 
+                                elapsedSeconds,
+                                tokenCount
+                            );
+                            
+                            this._sendProgress(percent);
+                        }
+                    }
+                };
+    
+                if (this.provider === 'deepseek') {
+                    chatConfig.deepseek = true;
+                } else if (this.provider === 'deepinfra') {
+                    chatConfig.deepinfra = true;
+                }
+    
+                const result = await this.AI.Chat(messages, chatConfig);
+    
+                if (!generatedBuffer && result) {
+                    if (result.full_text) {
+                        generatedBuffer = result.full_text;
+                    } else if (result.choices?.[0]?.message?.content) {
+                        generatedBuffer = result.choices[0].message.content;
+                    } else if (typeof result === 'string') {
+                        generatedBuffer = result;
+                    }
+                } else if (result && result.full_text && result.full_text.length > generatedBuffer.length) {
+                    generatedBuffer = result.full_text;
+                }
+    
+                this._sendProgress(100, true);
+                this.broadcastSSE({ 
+                    type: 'progress', 
+                    percent: 100,
+                    title: '✓ Complete - YandBox'
+                });
+                
+                await new Promise(resolve => setTimeout(resolve, 150));
+    
+                finalHtml = (generatedBuffer || '').trim();
+                
+                // Clean markdown code fences
+                finalHtml = finalHtml.replace(/^```html\s*\n?/i, '');
+                finalHtml = finalHtml.replace(/\n?```\s*$/i, '');
+                finalHtml = finalHtml.replace(/^```\s*\n?/i, '');
+                finalHtml = finalHtml.replace(/\n?```\s*$/i, '');
+                
+                if (!finalHtml || finalHtml.length < 20) {
+                    throw new Error('Generated content is empty or too short');
+                }
+    
+                // Ensure scrolling CSS is present
+                if (!finalHtml.includes('overflow-y') && !finalHtml.includes('overflow-y:')) {
+                    const scrollCSS = '<style>html{overflow-y:auto!important;height:auto!important}body{overflow-y:auto!important;min-height:100vh!important;padding-bottom:2rem}</style>';
+                    if (finalHtml.includes('</head>')) {
+                        finalHtml = finalHtml.replace('</head>', scrollCSS + '</head>');
+                    } else if (finalHtml.includes('<head>')) {
+                        finalHtml = finalHtml.replace('<head>', '<head>' + scrollCSS);
+                    } else if (finalHtml.includes('<html>')) {
+                        finalHtml = finalHtml.replace('<html>', '<html><head>' + scrollCSS + '</head>');
                     }
                 }
-            };
-
-            if (this.provider === 'deepseek') {
-                chatConfig.deepseek = true;
-            } else if (this.provider === 'deepinfra') {
-                chatConfig.deepinfra = true;
-            }
-
-            const result = await this.AI.Chat(messages, chatConfig);
-
-            if (!generatedBuffer && result) {
-                if (result.full_text) {
-                    generatedBuffer = result.full_text;
-                } else if (result.choices?.[0]?.message?.content) {
-                    generatedBuffer = result.choices[0].message.content;
-                } else if (typeof result === 'string') {
-                    generatedBuffer = result;
+    
+                success = true;
+                successfulResult = result;
+                
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    lastError = error;
+                    break;
+                }
+                
+                lastError = error;
+                console.error(`Generation attempt ${attempt} failed:`, error.message);
+                
+                if (attempt >= MAX_RETRIES) {
+                    break;
                 }
             }
-
-            this._sendProgress(100, true);
-            this.broadcastSSE({ 
-                type: 'progress', 
-                percent: 100,
-                title: '✓ Complete - YandBox'
-            });
-            
-            await new Promise(resolve => setTimeout(resolve, 150));
-
-            let finalHtml = (generatedBuffer || '').trim();
-            
-            finalHtml = finalHtml.replace(/^```html\s*\n?/i, '');
-            finalHtml = finalHtml.replace(/\n?```\s*$/i, '');
-            finalHtml = finalHtml.replace(/^```\s*\n?/i, '');
-            finalHtml = finalHtml.replace(/\n?```\s*$/i, '');
-            
-            if (!finalHtml || finalHtml.length < 20) {
-                throw new Error('Generated content is empty or too short');
-            }
-
-            if (!finalHtml.includes('overflow-y') && !finalHtml.includes('overflow-y:')) {
-                const scrollCSS = '<style>html{overflow-y:auto!important;height:auto!important}body{overflow-y:auto!important;min-height:100vh!important;padding-bottom:2rem}</style>';
-                if (finalHtml.includes('</head>')) {
-                    finalHtml = finalHtml.replace('</head>', scrollCSS + '</head>');
-                } else if (finalHtml.includes('<head>')) {
-                    finalHtml = finalHtml.replace('<head>', '<head>' + scrollCSS);
-                } else if (finalHtml.includes('<html>')) {
-                    finalHtml = finalHtml.replace('<html>', '<html><head>' + scrollCSS + '</head>');
-                }
-            }
-
+        }
+    
+        // Handle final result - RESTORE ORIGINAL CHAT RESPONSE BEHAVIOR
+        if (success) {
+            // Write the final HTML
             writeFileSync('./main.html', finalHtml, 'utf8');
-
+    
             // Add to chat history
             this.addToChatHistory(message, currentHtml, finalHtml);
-
+    
+            // Save version
             this.versions.push({
                 timestamp: new Date().toLocaleString(),
                 request: message,
                 html: finalHtml
             });
             this.saveVersions();
-
+    
+            // Broadcast final HTML to all connected clients
             this.broadcastSSE({ type: 'update-html', html: finalHtml });
-
-            if (!chatRes.writableEnded) {
+    
+            // ORIGINAL BEHAVIOR: Only send completion message, not the full code
+            if (chatRes && !chatRes.writableEnded) {
                 chatRes.write(`data: ${JSON.stringify({ type: 'token', token: '✅ Page updated successfully!' })}\n\n`);
                 chatRes.write('data: {"type":"end"}\n\n');
                 chatRes.end();
             }
-
+    
             this.requestCount++;
             
-            if (result.metadata?.usage) {
-                const usage = result.metadata.usage;
+            // Track costs including retry costs
+            if (successfulResult && successfulResult.metadata?.usage) {
+                const usage = successfulResult.metadata.usage;
                 const tokens = (usage.prompt_tokens || 0) + (usage.completion_tokens || 0);
                 let cost = 0;
                 
@@ -1193,7 +1332,7 @@ Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTM
                     this.sessionCost += cost;
                     this.totalCost += cost;
                     this.requests.push({
-                        model: result.metadata.model || this.model || this.provider,
+                        model: successfulResult.metadata.model || this.model || this.provider,
                         cost,
                         tokens,
                         time: new Date().toLocaleTimeString()
@@ -1208,29 +1347,47 @@ Output ONLY the raw HTML without markdown fences or explanations. Ensure the HTM
                 });
             }
             
+            // Log retry costs separately if any
+            if (retryCosts > 0) {
+                this.requests.push({
+                    model: (this.model || this.provider),
+                    cost: retryCosts,
+                    tokens: 0,
+                    time: new Date().toLocaleTimeString(),
+                    note: `Retry costs for ${attempt - 1} retries`
+                });
+            }
+            
             this.saveConfig();
-
-        } catch (error) {
-            if (error.name === 'AbortError') return;
             
-            console.error('Generation error:', error);
+        } else {
+            // All attempts failed
+            console.error('All generation attempts failed.');
             
+            // Restore backup HTML
             if (this.currentGeneration?.backupHtml) {
                 writeFileSync('./main.html', this.currentGeneration.backupHtml, 'utf8');
                 this.broadcastSSE({ type: 'update-html', html: this.currentGeneration.backupHtml });
             }
             
-            if (!chatRes.writableEnded) {
-                chatRes.write(`data: ${JSON.stringify({ type: 'token', token: '❌ Error: ' + error.message })}\n\n`);
+            // ORIGINAL BEHAVIOR: Send error message to chat
+            if (chatRes && !chatRes.writableEnded) {
+                chatRes.write(`data: ${JSON.stringify({ type: 'token', token: '❌ Error: ' + (lastError?.message || 'Generation failed') })}\n\n`);
                 chatRes.write('data: {"type":"end"}\n\n');
                 chatRes.end();
             }
-        } finally {
-            globalThis.fetch = this._originalFetch;
-            this._originalFetch = null;
-            this.currentGeneration = null;
-            this._resetProgress();
         }
+    
+        // Cleanup
+        globalThis.fetch = this._originalFetch;
+        this._originalFetch = null;
+        this.currentGeneration = null;
+        this._resetProgress();
+        this._clearGenerationState();
+        
+        // Help garbage collection
+        successfulResult = null;
+        finalHtml = null;
     }
 
     async handleChatMessage(req, res) {
