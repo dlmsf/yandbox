@@ -129,8 +129,8 @@ class YandBox {
         
         this.ensureBaseFiles().then(() => {
             this.initServer();
-            // Recover any interrupted generation from previous crash
-            this._recoverGenerationIfNeeded();
+            // Clear any stale generation state from previous crash
+            this._clearStaleGenerationState();
         }).catch(err => {
             console.error('Failed to initialize YandBox:', err);
             process.exit(1);
@@ -506,8 +506,12 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
                         writeFileSync(rootPath, htmlContent, 'utf8');
                     } catch (err) {
                         console.error(`Failed to generate ${file}:`, err);
-                        throw err;
+                        // Create minimal valid HTML instead of crashing
+                        writeFileSync(rootPath, '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>YandBox</title></head><body><h1>YandBox Ready</h1></body></html>', 'utf8');
                     }
+                } else {
+                    // Create minimal valid HTML if source doesn't exist
+                    writeFileSync(rootPath, '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>YandBox</title></head><body><h1>YandBox Ready</h1></body></html>', 'utf8');
                 }
             }
         }
@@ -986,6 +990,7 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
         
         this._resetProgress();
         this.currentGeneration = null;
+        this._clearGenerationState();
     }
 
     cancelGeneration() {
@@ -995,8 +1000,10 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
         const backupHtml = gen.backupHtml;
         this.abortGeneration();
         
-        writeFileSync('./main.html', backupHtml, 'utf8');
-        this.broadcastSSE({ type: 'update-html', html: backupHtml });
+        // Ensure we write valid HTML
+        const safeHtml = this._ensureValidHtml(backupHtml);
+        writeFileSync('./main.html', safeHtml, 'utf8');
+        this.broadcastSSE({ type: 'update-html', html: safeHtml });
     }
 
     async revertToVersion(index) {
@@ -1006,11 +1013,51 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
         this.abortGeneration();
         
         const versionHtml = this.versions[index].html;
-        writeFileSync('./main.html', versionHtml, 'utf8');
-        this.broadcastSSE({ type: 'update-html', html: versionHtml });
+        const safeHtml = this._ensureValidHtml(versionHtml);
+        writeFileSync('./main.html', safeHtml, 'utf8');
+        this.broadcastSSE({ type: 'update-html', html: safeHtml });
     }
 
-    // ============ ACID GENERATION STATE MANAGEMENT ============
+    // ============ HTML VALIDATION UTILITY ============
+    
+    _ensureValidHtml(html) {
+        if (!html || typeof html !== 'string' || html.trim().length < 20) {
+            return '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>YandBox</title><style>body{font-family:-apple-system,sans-serif;padding:2rem;background:#1e1e1e;color:#ccc}</style></head><body><h1>Page Reset</h1><p>The previous page was empty or invalid. Use the chat to generate a new page.</p></body></html>';
+        }
+        
+        let cleaned = html.trim();
+        
+        // Remove markdown code fences
+        cleaned = cleaned.replace(/^```html\s*\n?/i, '');
+        cleaned = cleaned.replace(/\n?```\s*$/i, '');
+        cleaned = cleaned.replace(/^```\s*\n?/i, '');
+        cleaned = cleaned.replace(/\n?```\s*$/i, '');
+        cleaned = cleaned.trim();
+        
+        // If after cleaning it's too short or doesn't look like HTML
+        if (cleaned.length < 50 || (!cleaned.toLowerCase().includes('<!doctype') && !cleaned.toLowerCase().includes('<html'))) {
+            return '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>YandBox</title><style>body{font-family:-apple-system,sans-serif;padding:2rem;background:#1e1e1e;color:#ccc}</style></head><body><h1>Generation Failed</h1><p>The AI generated invalid content. Please try again with a more specific request.</p></body></html>';
+        }
+        
+        // Ensure it has basic HTML structure
+        if (!cleaned.toLowerCase().includes('<!doctype')) {
+            cleaned = '<!DOCTYPE html>\n' + cleaned;
+        }
+        
+        // Ensure scrolling CSS is present
+        if (!cleaned.includes('overflow-y') && !cleaned.includes('overflow-y:')) {
+            const scrollCSS = '<style>html{overflow-y:auto!important;height:auto!important}body{overflow-y:auto!important;min-height:100vh!important;padding-bottom:2rem}</style>';
+            if (cleaned.includes('</head>')) {
+                cleaned = cleaned.replace('</head>', scrollCSS + '</head>');
+            } else if (cleaned.includes('<head>')) {
+                cleaned = cleaned.replace('<head>', '<head>' + scrollCSS);
+            }
+        }
+        
+        return cleaned;
+    }
+
+    // ============ GENERATION STATE MANAGEMENT ============
     
     _saveGenerationState(message, currentHtml) {
         try {
@@ -1035,41 +1082,72 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
         }
     }
 
-    _recoverGenerationIfNeeded() {
-        if (!existsSync(this.generationStatePath)) {
-            return;
+    _clearStaleGenerationState() {
+        // On startup, clear any stale generation state to prevent recovery of old interrupted generations
+        if (existsSync(this.generationStatePath)) {
+            try {
+                unlinkSync(this.generationStatePath);
+                console.log('Cleared stale generation state from previous session');
+                
+                // Also restore main.html if it's a loading template
+                if (existsSync('./main.html')) {
+                    const mainHtml = readFileSync('./main.html', 'utf8');
+                    if (mainHtml.includes('Generating...') && mainHtml.includes('YandBox')) {
+                        // It's a loading template, restore to a clean state
+                        const cleanHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>YandBox</title><style>body{font-family:-apple-system,sans-serif;padding:2rem;background:#1e1e1e;color:#ccc}</style></head><body><h1>YandBox Ready</h1><p>Use the chat to generate a new page.</p></body></html>';
+                        writeFileSync('./main.html', cleanHtml, 'utf8');
+                        console.log('Restored main.html from interrupted generation');
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to clear stale generation state:', error);
+            }
         }
         
+        // Ensure main.html exists and is valid
         try {
-            const state = JSON.parse(readFileSync(this.generationStatePath, 'utf8'));
-            
-            // Only recover if there's a valid message and no active generation
-            if (state.message && state.currentHtml && !this.currentGeneration) {
-                console.log('Recovering interrupted generation for message:', state.message.substring(0, 50) + '...');
-                // Note: We start generation without a chatRes, so the client will need to reconnect
-                // to the SSE stream to see the tokens
-                this.startGeneration(state.message, null, true);
+            if (!existsSync('./main.html')) {
+                const cleanHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>YandBox</title><style>body{font-family:-apple-system,sans-serif;padding:2rem;background:#1e1e1e;color:#ccc}</style></head><body><h1>YandBox Ready</h1><p>Use the chat to generate a new page.</p></body></html>';
+                writeFileSync('./main.html', cleanHtml, 'utf8');
             } else {
-                // Stale state file, clean it up
-                this._clearGenerationState();
+                const mainHtml = readFileSync('./main.html', 'utf8');
+                if (!mainHtml || mainHtml.trim().length < 20) {
+                    const cleanHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>YandBox</title><style>body{font-family:-apple-system,sans-serif;padding:2rem;background:#1e1e1e;color:#ccc}</style></head><body><h1>YandBox Ready</h1><p>Use the chat to generate a new page.</p></body></html>';
+                    writeFileSync('./main.html', cleanHtml, 'utf8');
+                }
             }
         } catch (error) {
-            console.error('Failed to recover generation state:', error);
-            this._clearGenerationState();
+            console.error('Failed to ensure main.html exists:', error);
         }
     }
 
-    // ============ MAIN GENERATION METHOD WITH RETRY AND ACID PROTECTION ============
+    // ============ MAIN GENERATION METHOD ============
 
     async startGeneration(message, chatRes, isRecovery = false) {
+        // Validate input message
+        if (!message || typeof message !== 'string' || message.trim().length === 0) {
+            console.error('Invalid generation message');
+            if (chatRes && !chatRes.writableEnded) {
+                chatRes.write(`data: ${JSON.stringify({ type: 'token', token: '❌ Error: Invalid request message' })}\n\n`);
+                chatRes.write('data: {"type":"end"}\n\n');
+                chatRes.end();
+            }
+            return;
+        }
+        
+        // Read current HTML with validation
         let currentHtml;
         try {
             currentHtml = readFileSync('./main.html', 'utf8');
+            currentHtml = this._ensureValidHtml(currentHtml);
+            // Write back the validated HTML
+            writeFileSync('./main.html', currentHtml, 'utf8');
         } catch (error) {
-            currentHtml = '<html><body></body></html>';
+            currentHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>YandBox</title><style>body{font-family:-apple-system,sans-serif;padding:2rem;background:#1e1e1e;color:#ccc}</style></head><body><h1>YandBox Ready</h1><p>Use the chat to generate a new page.</p></body></html>';
+            writeFileSync('./main.html', currentHtml, 'utf8');
         }
         
-        // Save state for crash recovery (only on first attempt, not during recovery)
+        // Save state for crash recovery
         if (!isRecovery) {
             this._saveGenerationState(message, currentHtml);
         }
@@ -1100,35 +1178,28 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
             return originalFetch(url, options);
         };
     
-        // Retry configuration
+        // Generation variables
         const MAX_RETRIES = 3;
         let attempt = 0;
         let lastError = null;
         let finalHtml = '';
         let success = false;
-        
-        // Track costs separately for retry attempts
-        let retryCosts = 0;
-        // Store the successful result for cost tracking
         let successfulResult = null;
+        let tokenCount = 0;
     
         while (attempt < MAX_RETRIES && !success) {
             attempt++;
             
             if (attempt > 1) {
                 console.log(`Retry attempt ${attempt}/${MAX_RETRIES}...`);
-                // Wait before retry
                 await new Promise(resolve => setTimeout(resolve, 2000));
             }
             
             let generatedBuffer = '';
-            let tokenCount = 0;
+            tokenCount = 0;
             const generationStartTime = Date.now();
             
-            const htmlStructure = {
-                tags: 0,
-                closingTags: 0
-            };
+            const htmlStructure = { tags: 0, closingTags: 0 };
     
             try {
                 const modeConstraints = this._getGenerationModeConstraints();
@@ -1137,8 +1208,6 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
                     mode: this.generationMode,
                     domains: this.allowedDomains 
                 });
-                
-                // Get chat history context
                 const chatHistoryContext = this._getChatHistoryContext();
                 
                 const systemPrompt = `You are an expert web developer. The user wants to modify the HTML page. Provide the complete new HTML code.
@@ -1149,11 +1218,7 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
     - Set body { overflow-y: auto !important; min-height: 100vh !important; }
     - NEVER use "overflow: hidden" on html or body
     - NEVER set "height: 100vh" with "overflow: hidden" on the body
-    - NEVER lock the viewport or prevent scrolling
     - Ensure content is longer than viewport to enable natural scrolling
-    - Add enough content, padding, and margins to ensure the page exceeds viewport height
-    - Use CSS "overflow-y: scroll" instead of "overflow: hidden" for containers that need scroll
-    - The page MUST have a visible scrollbar and respond to mouse wheel scrolling
     - Add padding-bottom: 2rem or more to body to ensure scrollability
     
     ${modeConstraints}
@@ -1221,6 +1286,7 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
     
                 const result = await this.AI.Chat(messages, chatConfig);
     
+                // Extract generated content
                 if (!generatedBuffer && result) {
                     if (result.full_text) {
                         generatedBuffer = result.full_text;
@@ -1242,28 +1308,12 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
                 
                 await new Promise(resolve => setTimeout(resolve, 150));
     
-                finalHtml = (generatedBuffer || '').trim();
+                // Validate and clean the generated HTML
+                finalHtml = this._ensureValidHtml(generatedBuffer);
                 
-                // Clean markdown code fences
-                finalHtml = finalHtml.replace(/^```html\s*\n?/i, '');
-                finalHtml = finalHtml.replace(/\n?```\s*$/i, '');
-                finalHtml = finalHtml.replace(/^```\s*\n?/i, '');
-                finalHtml = finalHtml.replace(/\n?```\s*$/i, '');
-                
-                if (!finalHtml || finalHtml.length < 20) {
-                    throw new Error('Generated content is empty or too short');
-                }
-    
-                // Ensure scrolling CSS is present
-                if (!finalHtml.includes('overflow-y') && !finalHtml.includes('overflow-y:')) {
-                    const scrollCSS = '<style>html{overflow-y:auto!important;height:auto!important}body{overflow-y:auto!important;min-height:100vh!important;padding-bottom:2rem}</style>';
-                    if (finalHtml.includes('</head>')) {
-                        finalHtml = finalHtml.replace('</head>', scrollCSS + '</head>');
-                    } else if (finalHtml.includes('<head>')) {
-                        finalHtml = finalHtml.replace('<head>', '<head>' + scrollCSS);
-                    } else if (finalHtml.includes('<html>')) {
-                        finalHtml = finalHtml.replace('<html>', '<html><head>' + scrollCSS + '</head>');
-                    }
+                // Double check - if ensureValidHtml returned the error template
+                if (finalHtml.includes('Generation Failed') || finalHtml.includes('invalid content')) {
+                    throw new Error('Generated content failed validation');
                 }
     
                 success = true;
@@ -1284,10 +1334,50 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
             }
         }
     
-        // Handle final result - RESTORE ORIGINAL CHAT RESPONSE BEHAVIOR
-        if (success) {
-            // Write the final HTML
-            writeFileSync('./main.html', finalHtml, 'utf8');
+        // Handle final result
+        if (success && finalHtml) {
+            // Atomic write - ensure we never write empty content
+            try {
+                // Verify HTML is valid before writing
+                const validatedHtml = this._ensureValidHtml(finalHtml);
+                if (validatedHtml.includes('Generation Failed')) {
+                    throw new Error('Final HTML failed validation');
+                }
+                
+                // Write to a temp file first, then rename for atomicity
+                writeFileSync('./main.html.tmp', validatedHtml, 'utf8');
+                writeFileSync('./main.html', validatedHtml, 'utf8');
+                
+                // Clean up temp file
+                try { unlinkSync('./main.html.tmp'); } catch (e) {}
+                
+                // Verify the write was successful
+                const writtenHtml = readFileSync('./main.html', 'utf8');
+                if (!writtenHtml || writtenHtml.trim().length < 50) {
+                    throw new Error('Written HTML is empty or too short');
+                }
+                
+                finalHtml = validatedHtml;
+            } catch (writeError) {
+                console.error('Failed to write final HTML:', writeError);
+                // Restore backup
+                writeFileSync('./main.html', currentHtml, 'utf8');
+                finalHtml = currentHtml;
+                
+                if (chatRes && !chatRes.writableEnded) {
+                    chatRes.write(`data: ${JSON.stringify({ type: 'token', token: '❌ Error: Failed to save generated page' })}\n\n`);
+                    chatRes.write('data: {"type":"end"}\n\n');
+                    chatRes.end();
+                }
+                
+                // Cleanup and return
+                globalThis.fetch = this._originalFetch;
+                this._originalFetch = null;
+                this.currentGeneration = null;
+                this._resetProgress();
+                this._clearGenerationState();
+                return;
+            }
     
             // Add to chat history
             this.addToChatHistory(message, currentHtml, finalHtml);
@@ -1303,7 +1393,7 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
             // Broadcast final HTML to all connected clients
             this.broadcastSSE({ type: 'update-html', html: finalHtml });
     
-            // ORIGINAL BEHAVIOR: Only send completion message, not the full code
+            // Send completion message to chat
             if (chatRes && !chatRes.writableEnded) {
                 chatRes.write(`data: ${JSON.stringify({ type: 'token', token: '✅ Page updated successfully!' })}\n\n`);
                 chatRes.write('data: {"type":"end"}\n\n');
@@ -1312,7 +1402,7 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
     
             this.requestCount++;
             
-            // Track costs including retry costs
+            // Track costs
             if (successfulResult && successfulResult.metadata?.usage) {
                 const usage = successfulResult.metadata.usage;
                 const tokens = (usage.prompt_tokens || 0) + (usage.completion_tokens || 0);
@@ -1320,11 +1410,9 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
                 
                 if (usage.estimated_cost !== undefined && usage.estimated_cost !== null) {
                     cost = usage.estimated_cost;
-                }
-                else if (this.provider === 'deepseek' && this.AI.DeepSeek) {
+                } else if (this.provider === 'deepseek' && this.AI.DeepSeek) {
                     cost = this.AI.DeepSeek._calculateCost(this.model, usage);
-                }
-                else if (this.provider === 'deepinfra' && this.AI.DeepInfra) {
+                } else if (this.provider === 'deepinfra' && this.AI.DeepInfra) {
                     cost = this.AI.DeepInfra._calculateCost(this.model, usage);
                 }
                 
@@ -1347,32 +1435,20 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
                 });
             }
             
-            // Log retry costs separately if any
-            if (retryCosts > 0) {
-                this.requests.push({
-                    model: (this.model || this.provider),
-                    cost: retryCosts,
-                    tokens: 0,
-                    time: new Date().toLocaleTimeString(),
-                    note: `Retry costs for ${attempt - 1} retries`
-                });
-            }
-            
             this.saveConfig();
             
         } else {
             // All attempts failed
             console.error('All generation attempts failed.');
             
-            // Restore backup HTML
-            if (this.currentGeneration?.backupHtml) {
-                writeFileSync('./main.html', this.currentGeneration.backupHtml, 'utf8');
-                this.broadcastSSE({ type: 'update-html', html: this.currentGeneration.backupHtml });
-            }
+            // Restore backup HTML - ensure it's valid
+            const safeBackup = this._ensureValidHtml(currentHtml);
+            writeFileSync('./main.html', safeBackup, 'utf8');
+            this.broadcastSSE({ type: 'update-html', html: safeBackup });
             
-            // ORIGINAL BEHAVIOR: Send error message to chat
+            // Send error message to chat
             if (chatRes && !chatRes.writableEnded) {
-                chatRes.write(`data: ${JSON.stringify({ type: 'token', token: '❌ Error: ' + (lastError?.message || 'Generation failed') })}\n\n`);
+                chatRes.write(`data: ${JSON.stringify({ type: 'token', token: '❌ Error: ' + (lastError?.message || 'Generation failed after ' + MAX_RETRIES + ' attempts') })}\n\n`);
                 chatRes.write('data: {"type":"end"}\n\n');
                 chatRes.end();
             }
@@ -1384,10 +1460,6 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
         this.currentGeneration = null;
         this._resetProgress();
         this._clearGenerationState();
-        
-        // Help garbage collection
-        successfulResult = null;
-        finalHtml = null;
     }
 
     async handleChatMessage(req, res) {
@@ -1400,6 +1472,14 @@ EXTERNAL RESOURCES GUIDELINES (EXTERNAL MODE):
         req.on('end', async () => {
             try {
                 const { message } = JSON.parse(body);
+                
+                if (!message || typeof message !== 'string' || message.trim().length === 0) {
+                    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+                    res.write(`data: ${JSON.stringify({ type: 'token', token: '❌ Please enter a valid message.' })}\n\n`);
+                    res.write('data: {"type":"end"}\n\n');
+                    res.end();
+                    return;
+                }
                 
                 if (!this.AI) {
                     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -1591,9 +1671,7 @@ async function manageKeys() {
             console.log('\n\x1b[36mEnter EasyAI server URL:\x1b[0m');
             console.log('\x1b[90mExamples: localhost, http://192.168.1.100\x1b[0m');
             serverUrl = (await question('\x1b[90m> \x1b[0m')).trim();
-            if (!serverUrl) {
-                serverUrl = 'localhost';
-            }
+            if (!serverUrl) serverUrl = 'localhost';
             
             console.log('\n\x1b[36mPort (Enter for default 4000):\x1b[0m');
             const portStr = (await question('\x1b[90m> \x1b[0m')).trim();
@@ -1611,23 +1689,12 @@ async function manageKeys() {
         const name = await question('\n\x1b[36mConfiguration name (Enter for default):\x1b[0m \x1b[90m> \x1b[0m');
         const configName = name.trim() || 'default';
         
-        configs[configName] = {
-            provider,
-            token,
-            model,
-            serverUrl,
-            serverPort,
-            serverToken
-        };
-        
+        configs[configName] = { provider, token, model, serverUrl, serverPort, serverToken };
         saved.configs = configs;
-        if (!saved.activeConfig) {
-            saved.activeConfig = configName;
-        }
+        if (!saved.activeConfig) saved.activeConfig = configName;
         
         writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
         console.log('\n\x1b[32m✓ Configuration added!\x1b[0m');
-        console.log(`\x1b[90m  Active: ${saved.activeConfig}\x1b[0m`);
         return true;
         
     } else if (action === 's' && configNames.length > 0) {
@@ -1650,15 +1717,11 @@ async function manageKeys() {
     } else if (action === 'm' && configNames.length > 0) {
         const targetName = activeConfig || configNames[0];
         const cfg = configs[targetName];
-        
         if (!cfg) return true;
         
         console.log(`\n\x1b[36mChanging model for: \x1b[33m${targetName}\x1b[0m`);
-        console.log(`\x1b[90mCurrent model: ${cfg.model || 'none'}\x1b[0m`);
-        
         const newModel = await selectModel(cfg.provider);
         cfg.model = newModel || null;
-        
         saved.configs = configs;
         writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
         console.log('\n\x1b[32m✓ Model updated!\x1b[0m');
@@ -1669,18 +1732,13 @@ async function manageKeys() {
         if (configs[name.trim()]) {
             delete configs[name.trim()];
             saved.configs = configs;
-            if (saved.activeConfig === name.trim()) {
-                saved.activeConfig = Object.keys(configs)[0] || null;
-            }
+            if (saved.activeConfig === name.trim()) saved.activeConfig = Object.keys(configs)[0] || null;
             writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
             console.log('\n\x1b[32m✓ Configuration deleted!\x1b[0m');
         } else {
             console.log('\n\x1b[31m✗ Configuration not found\x1b[0m');
         }
         return true;
-        
-    } else if (action === 'q') {
-        return false;
     }
     
     return false;
@@ -1713,6 +1771,12 @@ async function parseArgs() {
     if (args.includes('new')) {
         console.log('\x1b[33m🆕 Starting fresh with new HTML pages...\x1b[0m\n');
         
+        // Clear generation state
+        const genStatePath = path.join(process.cwd(), 'yandbox-generation-state.json');
+        if (existsSync(genStatePath)) {
+            try { unlinkSync(genStatePath); console.log('\x1b[32m  ✓ Cleared generation state\x1b[0m'); } catch (err) {}
+        }
+        
         const htmlFiles = ['index.html', 'chat.html', 'main.html'];
         let removed = 0;
         
@@ -1729,17 +1793,18 @@ async function parseArgs() {
             }
         }
         
-        if (removed === 0) {
-            console.log('\x1b[90m  No HTML files found to remove.\x1b[0m');
-        } else {
-            console.log(`\n\x1b[36m✓ Cleaned ${removed} HTML file(s). Configs preserved.\x1b[0m`);
-        }
-        console.log('\x1b[90mRun "node YandBox.js" to regenerate fresh pages.\x1b[0m\n');
+        console.log(`\n\x1b[36m✓ Cleaned ${removed} HTML file(s). Run "node YandBox.js" to start fresh.\x1b[0m\n`);
         process.exit(0);
     }
     
     if (args.includes('reset')) {
         console.log('\x1b[33m🔄 Resetting YandBox...\x1b[0m\n');
+        
+        // Clear generation state first
+        const genStatePath = path.join(process.cwd(), 'yandbox-generation-state.json');
+        if (existsSync(genStatePath)) {
+            try { unlinkSync(genStatePath); console.log('\x1b[32m  ✓ Cleared generation state\x1b[0m'); } catch (err) {}
+        }
         
         const filesToRemove = ['index.html', 'chat.html', 'main.html'];
         const jsonFiles = ['yandbox-config.json', 'yandbox-log.json', 'yandbox-versions.json', 'yandbox-chat-history.json'];
@@ -1758,21 +1823,14 @@ async function parseArgs() {
             }
         }
         
-        if (removed === 0) {
-            console.log('\x1b[90m  Nothing to reset. All files already clean.\x1b[0m');
-        } else {
-            console.log(`\n\x1b[36m✓ Reset complete! Removed ${removed} file(s).\x1b[0m`);
-        }
-        console.log('\x1b[90mRun "node YandBox.js" to start fresh.\x1b[0m\n');
+        console.log(`\n\x1b[36m✓ Reset complete! Run "node YandBox.js" to start fresh.\x1b[0m\n`);
         process.exit(0);
     }
     
     if (args.includes('keys') || args.includes('models')) {
         await manageKeys();
         saved = existsSync(tokenPath) ? JSON.parse(readFileSync(tokenPath, 'utf8')) : {};
-        if (saved.activeConfig && saved.configs?.[saved.activeConfig]) {
-            return config;
-        }
+        if (saved.activeConfig && saved.configs?.[saved.activeConfig]) return config;
         process.exit(0);
     }
     
@@ -1789,9 +1847,7 @@ async function parseArgs() {
     }
 
     for (const arg of args) {
-        if (arg.startsWith('--port=')) {
-            config.port = parseInt(arg.split('=')[1]);
-        }
+        if (arg.startsWith('--port=')) config.port = parseInt(arg.split('=')[1]);
         if (arg.startsWith('--mode=')) {
             const mode = arg.split('=')[1];
             if (['vanilla', 'balanced', 'external'].includes(mode)) {
@@ -1816,21 +1872,12 @@ async function parseArgs() {
             const provider = arg.startsWith('sk-') ? 'deepseek' : 'deepinfra';
             const defaultModel = provider === 'deepseek' ? 'deepseek-v4-flash' : 'meta-llama/Meta-Llama-3.1-8B-Instruct';
             
-            configs['default'] = {
-                provider,
-                token: arg,
-                model: defaultModel,
-                serverUrl: null,
-                serverPort: null,
-                serverToken: null
-            };
-            
+            configs['default'] = { provider, token: arg, model: defaultModel, serverUrl: null, serverPort: null, serverToken: null };
             saved.configs = configs;
             saved.activeConfig = 'default';
             writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
             
-            console.log('\x1b[32m✓ ' + provider.toUpperCase() + ' token saved! Starting with default model.\x1b[0m');
-            console.log('\x1b[90m  Run "node YandBox.js models" to change.\x1b[0m\n');
+            console.log('\n\x1b[32m✓ ' + provider.toUpperCase() + ' token saved!\x1b[0m\n');
             return config;
         }
     }
@@ -1850,59 +1897,34 @@ async function parseArgs() {
             provider = 'deepseek';
             console.log('\n\x1b[36mPaste DeepSeek API token:\x1b[0m');
             token = (await question('\x1b[90m> \x1b[0m')).trim();
-            if (!token) {
-                console.log('\x1b[31mNo token provided. Exiting.\x1b[0m');
-                process.exit(0);
-            }
+            if (!token) { console.log('\x1b[31mNo token provided. Exiting.\x1b[0m'); process.exit(0); }
             model = 'deepseek-v4-flash';
-            
         } else if (choice === '2') {
             provider = 'deepinfra';
             console.log('\n\x1b[36mPaste DeepInfra API token:\x1b[0m');
             token = (await question('\x1b[90m> \x1b[0m')).trim();
-            if (!token) {
-                console.log('\x1b[31mNo token provided. Exiting.\x1b[0m');
-                process.exit(0);
-            }
+            if (!token) { console.log('\x1b[31mNo token provided. Exiting.\x1b[0m'); process.exit(0); }
             model = 'meta-llama/Meta-Llama-3.1-8B-Instruct';
-            
         } else if (choice === '3') {
             provider = 'local';
             console.log('\n\x1b[36mEnter EasyAI server URL:\x1b[0m');
-            console.log('\x1b[90mExample: localhost\x1b[0m');
-            serverUrl = (await question('\x1b[90m> \x1b[0m')).trim();
-            if (!serverUrl) {
-                serverUrl = 'localhost';
-            }
-            
+            serverUrl = (await question('\x1b[90m> \x1b[0m')).trim() || 'localhost';
             console.log('\n\x1b[36mPort (Enter for default 4000):\x1b[0m');
             const portStr = (await question('\x1b[90m> \x1b[0m')).trim();
             serverPort = portStr ? parseInt(portStr) : 4000;
-            
             console.log('\n\x1b[36mServer token (Enter to skip):\x1b[0m');
             serverToken = (await question('\x1b[90m> \x1b[0m')).trim() || null;
-            
             model = null;
-            
         } else {
             console.log('\x1b[31mInvalid choice. Exiting.\x1b[0m');
             process.exit(0);
         }
         
         const configs = saved.configs || {};
-        configs['default'] = {
-            provider,
-            token,
-            model,
-            serverUrl,
-            serverPort,
-            serverToken
-        };
-        
+        configs['default'] = { provider, token, model, serverUrl, serverPort, serverToken };
         saved.configs = configs;
         saved.activeConfig = 'default';
         writeFileSync(tokenPath, JSON.stringify(saved, null, 2));
-        
         console.log('\n\x1b[32m✓ Configuration saved! Starting server...\x1b[0m\n');
         return config;
     }
